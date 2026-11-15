@@ -583,6 +583,68 @@ static int mix_depth(int i, int guard) {   /* how many sub mixes lie between thi
     return 1 + mix_depth(mixes[i].dest, guard + 1);
 }
 
+/* (enhanced) Music volume / Effects volume (host/enh_audio.c, the rule in host/enh_audio.h): a PCM16 voice, or a voice
+   streamed dry at pitch 1, is the music; the rest the effects. The voice's gain, ramped from its last frame's, rides on its own volume ramp for the frame:
+   render_frame scales v->volume and v->ramp_volume around render_voice and puts them back after. 100% both: 1 to 1. */
+/* (enhanced) HOOKSHOT_ENH_AUDIO_LOG=2: every 2 s, each playing voice: its format, channels, wave buffers queued and
+   appended in all (a stream keeps getting new ones), whether the current one loops, samples played, volume and where it
+   goes, for telling the music from the rest (docs/enhanced/AUDIO_MIX.md) */
+static void enh_voice_diag(void) {
+    static int on = -1;
+    static int64_t next;
+    static uint64_t tail[MAX_VOICES];
+    static unsigned appended[MAX_VOICES];
+    if (on < 0) on = getenv("HOOKSHOT_ENH_AUDIO_LOG") && atoi(getenv("HOOKSHOT_ENH_AUDIO_LOG")) >= 2;
+    if (!on) return;
+    for (int i = 0; i < MAX_VOICES; i++) {
+        const Voice *v = &voices[i];
+        if (!v->used || !v->nwb) continue;
+        const uint64_t t = v->wbc[v->nwb - 1].buffer + (uint64_t)v->wbc[v->nwb - 1].start;
+        if (t != tail[i]) tail[i] = t, appended[i]++;
+    }
+    const int64_t now = hos_now_ns();
+    if (now < next) return;
+    next = now + 2000000000LL;
+    for (int i = 0; i < MAX_VOICES; i++) {
+        const Voice *v = &voices[i];
+        if (!v->used || v->state != PLAY_STARTED) continue;
+        char d[96] = "";
+        if (v->dest_kind == DEST_SPLITTER && v->dest >= 0 && v->dest < MAX_SPLITTERS && splitters[v->dest].used) {
+            int n = snprintf(d, sizeof d, "splitter %d ->", v->dest);
+            for (int k = 0; k < splitters[v->dest].dests && n < 80; k++) n += snprintf(d + n, sizeof d - n, " %d", splitters[v->dest].dest_mix[k]);
+        } else snprintf(d, sizeof d, "%s %d", v->dest_kind == DEST_MIX ? "mix" : "none", v->dest);
+        hos_log("enhanced: diag voice %d fmt %d ch %d rate %d pitch %.2f vol %.2f queued %d appended %u loop %d played %lld %s",
+                i, v->format, v->channels, v->rate, v->pitch, v->volume, v->nwb, appended[i], v->nwb ? v->wbc[0].loop : -1,
+                (long long)v->played, d);
+    }
+}
+
+static void enh_render_voice(Voice *v) {
+    void hos_enh_audio_forget(int index);
+    void hos_enh_audio_gain(int index, int is_pcm16, int queued, int loops, float pitch, int destinations, int64_t played,
+                            float *from, float *to);
+    if (v->state != PLAY_STARTED) {
+        hos_enh_audio_forget((int)(v - voices));
+        render_voice(v);
+        return;
+    }
+    const int destinations = v->dest_kind == DEST_MIX ? 1 :
+        v->dest_kind == DEST_SPLITTER && v->dest >= 0 && v->dest < MAX_SPLITTERS && splitters[v->dest].used ? splitters[v->dest].dests : 0;
+    float g0 = 1.0f, g1 = 1.0f;
+    hos_enh_audio_gain((int)(v - voices), v->format == FMT_PCM16, v->nwb, v->nwb > 0 && v->wbc[0].loop, v->pitch,
+                       destinations, v->played, &g0, &g1);
+    if (g0 == 1.0f && g1 == 1.0f) {
+        render_voice(v);
+        return;
+    }
+    const float volume = v->volume;
+    v->volume = volume * g1;
+    v->ramp_volume *= g0;
+    render_voice(v);
+    v->volume = volume;
+    v->ramp_volume = volume;   /* (as render_voice leaves it: the frame ended at the voice's own volume) */
+}
+
 static void render_frame(int16_t *pcm, int channels) {   /* 240 frames of the device's 2 or 6 channels */
     for (int m = 0; m < MAX_MIXES; m++)
         if (mixes[m].used) {
@@ -590,7 +652,8 @@ static void render_frame(int16_t *pcm, int channels) {   /* 240 frames of the de
             memset(mixes[m].buf, 0, (size_t)rows * sizeof mixes[m].buf[0]);
         }
     for (int i = 0; i < MAX_VOICES; i++)
-        if (voices[i].used) render_voice(&voices[i]);
+        if (voices[i].used) enh_render_voice(&voices[i]);   /* (enhanced) render_voice with the Music/Effects volume */
+    enh_voice_diag();   /* (enhanced) HOOKSHOT_ENH_AUDIO_LOG=2 */
     for (int i = 0; i < MAX_SPLITTERS; i++)   /* (the splitters' volume ramps: once a frame, whichever voices use them) */
         if (splitters[i].used)
             for (int d = 0; d < splitters[i].dests; d++)

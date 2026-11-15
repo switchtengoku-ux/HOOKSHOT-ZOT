@@ -5994,6 +5994,8 @@ void fill_replay_table(MkwVkRenderer& t) {
         if (id == HOS_OPT_ENH_LIGHTBAR) return opts.enh_lightbar;
         if (id == HOS_OPT_ENH_LOW_LIFE_RUMBLE) return opts.enh_low_life_rumble;
         if (id == HOS_OPT_ENH_TRIGGERS) return opts.enh_triggers;
+        if (id == HOS_OPT_ENH_MUSIC_VOLUME) return opts.enh_music_volume;   // (enhanced) host/enh_audio.c
+        if (id == HOS_OPT_ENH_EFFECTS_VOLUME) return opts.enh_effects_volume;
         if (id == HOS_OPT_TEXT_SIZE) return opts.text_size;
         if (id == HOS_OPT_CAMERA_SPEED) return opts.camera_speed;
         if (id == HOS_OPT_PROMPTS) return opts.prompts;

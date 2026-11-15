@@ -35,6 +35,11 @@ This file adds the fork's rules and overrides upstream where they conflict.
 - Tests: `tests/run_all.py` with the builder's Python. v2.3.1 has **24 known failures on this PC**
   ([docs/enhanced/TEST_BASELINE.md](docs/enhanced/TEST_BASELINE.md)): a change must not add any.
 - Many tests read the source text: renaming or reshaping a function can break a far-away check.
+- **Never use `HOS_AUDIO_MUTE=1` for a driven run on Windows.** It calls `waveOutSetVolume(0)`, which sets the
+  game's audio session channel volumes to 0, and Windows keeps them for that `hookshot.exe` path: the player then has
+  no sound, and the Volume mixer does not show it (it shows the master at 100%). Leave the sound on (tell the owner
+  first), or use `HOS_AUDIO_DUMP`. A run of `scripts/hookshot_ctl.py launch` also makes the game rewrite `option.sav`:
+  snapshot the saves first (`scripts/enhanced/zot_saves.py`) and restore them after.
 - Build into `G:\EMU\NS2\ZOT-DEV` with work files on `H:` (C: is nearly full). Never build into, or write saves of,
   the player's install `G:\EMU\NS2\ZOT`.
 
