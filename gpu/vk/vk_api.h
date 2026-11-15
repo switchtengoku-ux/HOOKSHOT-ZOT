@@ -76,6 +76,9 @@ enum { HOS_OPT_RENDER_THREAD = 58 };
 enum { HOS_OPT_ENH_LIGHTBAR = 61, HOS_OPT_ENH_LOW_LIFE_RUMBLE, HOS_OPT_ENH_TRIGGERS };
 /* (enhanced) Hookshot Enhanced's Audio rows (host/enh_audio.c): Music volume and Effects volume, 0 to 150 percent */
 enum { HOS_OPT_ENH_MUSIC_VOLUME = 64, HOS_OPT_ENH_EFFECTS_VOLUME };
+/* (enhanced) the photo mode (gpu/vk/enh_photo.cpp): 1 while on; the host hides the HUD, holds the world and moves the free
+   camera from it (host/enh_photo.c) */
+enum { HOS_OPT_ENH_PHOTO = 66 };
 
 /* (hookshot) the controls' names (host/nn_hid.c, host/pad_sdl.c, the pad_ and key_ lines of hookshot_options.ini):
    the Switch's buttons in nn::hid's bit order, and a gamepad's inputs by position (the bottom face button first:

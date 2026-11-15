@@ -367,6 +367,8 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | Menu size | Small, Medium, Large | Medium |
 | | Game speed | Per frame, Real time | Real time |
 | | Field of view | 50% to 150%, in steps of 5; applies immediately during gameplay | 100% (original) |
+| | Photo mode | Off, On (Hookshot Enhanced: the HUD hidden, the world held still, the free camera; F8 in play) | Off |
+| | Take a photo | Saves a PNG of the picture at its full size in Pictures\Hookshot (Hookshot Enhanced; F9 in play) | None taken |
 | | Text speed | Normal, 2x, 4x, Instant | Normal |
 | | Text size | Original, 110%, 125%, 150%, 175% (dialogue, Navi and signs) | Original |
 | | Skip title screen | Off, On (after a restart) | Off |

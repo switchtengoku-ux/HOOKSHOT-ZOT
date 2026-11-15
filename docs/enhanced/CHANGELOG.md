@@ -19,3 +19,6 @@ Changes of the fork only. Upstream's are in [CHANGELOG.md](../../CHANGELOG.md).
   and off, and keeps mod profiles ([MOD_MANAGER.md](MOD_MANAGER.md)). Branch `feature/mod-manager`.
 - Graphics profiles in the Insert menu (Graphics tab: Graphics profile, Save profile as), in English and French.
   Branch `feature/graphics-profiles-menu`.
+- Photo mode: F8 or Gameplay → Photo mode hides the HUD, holds the world still and gives the controls to the free
+  camera; F9 or Take a photo saves a PNG at the picture's own size in the Pictures folder ([PHOTO_MODE.md](PHOTO_MODE.md)).
+  F6 and F7 hide the HUD or hold the world alone. English and French. Branch `feature/photo-hud-proto`.

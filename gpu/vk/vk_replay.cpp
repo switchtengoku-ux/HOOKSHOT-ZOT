@@ -28,6 +28,9 @@
 #include <map>
 #include <unordered_map>
 #include <unordered_set>
+#include <ctime>         // (enhanced) enh_photo_shot.inc
+#include <filesystem>
+#include "enh_photo.h"
 
 #include "vk_temporal.h"
 #include "vk_fsr3_inputs.h"   // (the camera jitter while AMD FSR 3.1 upscales)
@@ -4036,6 +4039,7 @@ void shot_ask_take() {
         a.done(a.ctx, at, ok ? 1 : 0);
     }).detach();
 }
+#include "enh_photo_shot.inc"   // (enhanced) the photo mode's photo, at the picture's own size
 void frame_info(int64_t* replayed, int64_t* draws, int* width, int* height) {
     int64_t v[4] = {0, 0, 0, 0};
     draw_stats(&v[0], &v[1], &v[2], &v[3]);   // (counters the replay's thread writes: read as they are, a sample)
@@ -4217,12 +4221,14 @@ void do_present(const nvn_tex* t, const int crop[4], float cover) {
             }
         }
         shot_ask_record(r.cmd, src, sw, sh, crop, value);   // (the control bridge's, host/control.c)
+        enh_photo_record(r.cmd, src, sw, sh, crop, value);   // (enhanced) the photo mode's photo (enh_photo_shot.inc)
         memory_end_submission(r.cmd, r.part);
         full_barrier(r.cmd);
         submit_recording(r);   // (nothing is stopped at a present: drain)
         if (pushed.load() < value) pushed = value;
         done_max = std::max(done_max, value), signaled = std::max(signaled, value);
         shot_ask_take();   // (an earlier present's, when the GPU is past it)
+        enh_photo_take();   // (enhanced)
         if (fg_after) {
             // (its slot is free again once the next submit's value is reached: that one comes after it)
             Recording& g = begin_recording(value + 1);
@@ -5996,6 +6002,7 @@ void fill_replay_table(MkwVkRenderer& t) {
         if (id == HOS_OPT_ENH_TRIGGERS) return opts.enh_triggers;
         if (id == HOS_OPT_ENH_MUSIC_VOLUME) return opts.enh_music_volume;   // (enhanced) host/enh_audio.c
         if (id == HOS_OPT_ENH_EFFECTS_VOLUME) return opts.enh_effects_volume;
+        if (id == HOS_OPT_ENH_PHOTO) return enh_photo_on();   // (enhanced) host/enh_photo.c
         if (id == HOS_OPT_TEXT_SIZE) return opts.text_size;
         if (id == HOS_OPT_CAMERA_SPEED) return opts.camera_speed;
         if (id == HOS_OPT_PROMPTS) return opts.prompts;

@@ -1651,7 +1651,9 @@ void hos_oot_free_view(Ctx *c, uint64_t view) {
 
     static SRWLOCK lock = SRWLOCK_INIT;
     AcquireSRWLockExclusive(&lock);
-    const int enabled = rx_option(HOS_OPT_CHEAT_CAMERA, 0);
+    /* (enhanced) the photo mode's free camera too (host/enh_photo.c; weak: without it, the debug tools' alone) */
+    extern int hos_enh_photo_camera(void) __attribute__((weak));
+    const int enabled = rx_option(HOS_OPT_CHEAT_CAMERA, 0) || (hos_enh_photo_camera && hos_enh_photo_camera());
     oot_build_free_view(c, enabled ? view : 0, view + 8);
     ReleaseSRWLockExclusive(&lock);
 #else

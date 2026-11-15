@@ -553,6 +553,10 @@ float hos_hud_scale(float r, float full) { return r > 0.0f && full > 0.0f && r <
 
 /* Each present (host/rx_backend.c host_wide_menus): the scales and moves for the picture's shape, and the plan */
 void hos_wide_ui_tick(void) {
+    {   /* (enhanced) the photo mode's keys (host/enh_photo.c; weak, as above) */
+        extern void hos_enh_photo_tick(void) __attribute__((weak));
+        if (hos_enh_photo_tick) hos_enh_photo_tick();
+    }
     static const char *env;
     static int looked;
     static float hud_max, hud_full, last[8];
@@ -629,6 +633,11 @@ static void store_f(Ctx *c, uint64_t a, float f) {
 void hos_wide_ui_placed(Ctx *c, uint64_t pane) {
     const uint64_t parent = ui_parent;
     ui_parent = 0;
+    {   /* (enhanced) the photo mode's hidden HUD (host/enh_photo.c): before this file's own moves, at 16:9 too. Weak: a
+           build or a test of this file without host/enh_photo.c calls nothing */
+        extern void hos_enh_hud_placed(Ctx *c, uint64_t pane, uint64_t parent) __attribute__((weak));
+        if (hos_enh_hud_placed) hos_enh_hud_placed(c, pane, parent);
+    }
     if (!ui_on) return;   /* (off: the transforms are the game's) */
     const Node *pn = parent ? node_find(parent) : NULL;
     if (parent && !(pn && pn->layout && !pn->dead && pn->tree)) {   /* (a menu's pane, or a HUD part in one: not noted. A pane
