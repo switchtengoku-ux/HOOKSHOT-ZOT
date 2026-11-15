@@ -10,7 +10,7 @@ implement, test against [TEST_BASELINE.md](TEST_BASELINE.md), document, commit.
 | 3 | Unmodified v2.3.1 built and tested on this PC | Done | [BUILD_WINDOWS.md](BUILD_WINDOWS.md), [TEST_BASELINE.md](TEST_BASELINE.md) |
 | 4 | Save manager | Done (`feature/save-manager`) | [SAVE_MANAGER.md](SAVE_MANAGER.md) |
 | 5 | Foundations: CLAUDE.md, fork README, build script, these docs | In review (`feature/foundations`) | |
-| 6 | DualSense: lightbar (e.g. hearts colour), adaptive triggers, on/off | Planned | SDL3 `SDL_SetGamepadLED`, `SDL_SendGamepadEffect`; game state from `host/oot_state_tap.c` |
+| 6 | DualSense: lightbar (hearts colour), adaptive triggers, on/off | Phase A in review (`feature/dualsense`, switches in `hookshot_env.txt`); phase B: menu rows | SDL3 `SDL_SetGamepadLED`, `SDL_SendGamepadEffect`; game state from `host/oot_state_tap.c` |
 | 7 | Performance recording: from the menu or a key, P95/P99, session report | Planned | Ideas from XC3's `perfmon.c`; code in `gpu/vk/vk_fps.cpp` |
 | 8 | Mod manager tool over the existing loader: list, enable/disable, conflicts, profiles | Planned | No second loader: `host/mods.c`'s rules |
 | 9 | Named graphics profiles | Planned | A tool over `hookshot_options.ini` first |

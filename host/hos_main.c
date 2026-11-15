@@ -1568,6 +1568,12 @@ void hos_oot_lift_player(Ctx *c, uint64_t actor) {
     oot_update_player_cheats(c, actor, components);
     void hos_oot_state_tap(uint64_t actor);   /* the control bridge's copied snapshot and per-connection samples */
     hos_oot_state_tap(actor);
+    {   /* (enhanced) Link's life for the lightbar (host/enh_dualsense.c), read only when it is switched on */
+        int hos_enh_lightbar_on(void), hos_oot_life(int *life, int *max_life);
+        void hos_enh_set_life(int life, int max_life);
+        int life, max_life;
+        if (hos_enh_lightbar_on() && hos_oot_life(&life, &max_life)) hos_enh_set_life(life, max_life);
+    }
     ReleaseSRWLockExclusive(&cheats_lock);
 #else
     (void)c;
