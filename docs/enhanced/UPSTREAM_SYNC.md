@@ -40,3 +40,6 @@ upstream's workflows build on every tag and publish releases, so keep it disable
   `builder/py/hookshot_builder/updater.py`, `builder/setup/setup.c`). A build from the clone has no launcher, so this
   does not apply yet. A fork release that ships the Builder must point these at the fork's releases or turn updating off.
 - `.github/workflows/release.yml` and the build workflows assume upstream's release process.
+- `.github/dependabot.yml` is removed in the fork (Dependabot opened pull requests to bump upstream's workflow
+  actions, which do not run here). An upstream merge that changes that file brings it back as a conflict: keep it
+  deleted.
