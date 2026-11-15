@@ -17,9 +17,9 @@ python -I scripts\enhanced\zot_graphics.py apply "120 FPS" --game G:\EMU\NS2\ZOT
 | Command | What it does |
 |---|---|
 | `save NAME --game GAME` | The game's Graphics settings saved as profile NAME (`--replace` to overwrite one) |
-| `list` | The profiles, with their output size, upscaler, frame rate cap and HDR (as the file numbers them) |
-| `show NAME` | A profile's lines |
-| `diff NAME --game GAME` | What applying it would change, line by line |
+| `list` | The profiles, with their output size, upscaler, frame rate cap and HDR |
+| `show NAME` | A profile's settings, by row name and as the menu shows them |
+| `diff NAME --game GAME` | What applying it would change, row by row (`Game frame rate cap  90 -> 120`) |
 | `apply NAME --game GAME` | Its settings put into the game's options file: the Graphics lines only, every other line kept in its order. The file before is copied to `<store>\backups` first. `--dry-run` shows the changes and writes nothing |
 | `delete NAME` | The profile removed |
 
@@ -33,8 +33,8 @@ The 28 keys the menu saves its Graphics rows under, in the menu's order (`GRAPHI
 ratio, Output resolution, Profile, Upscaler, DLSS model, Render resolution, Sharpness, Frame generation (and by),
 Frame pacing, Game frame rate cap, Reflex, Anti-Lag 2, Fullscreen, V-Sync, Window scaling filter, Ultrawide menus, the
 HDR rows, Texture detail, Anisotropic filtering, GPU device, Threaded rendering and VRAM budget.
-`tests/test_enh_graphics.py` checks that list against `gpu/vk/vk_menu.cpp`'s rows, so a row upstream adds or renames
-shows up as a failing test.
+`tests/test_enh_graphics.py` checks that list, the row names and the choices it shows (`ROWS`) against
+`gpu/vk/vk_menu.cpp`, so a row or a choice upstream adds or renames shows up as a failing test.
 
 Rows marked "after a restart" in the menu take effect at the next start, as when they are changed there. A row the
 PC cannot use (Reflex without an NVIDIA card) is saved and put back as it is; the game ignores it there as usual.

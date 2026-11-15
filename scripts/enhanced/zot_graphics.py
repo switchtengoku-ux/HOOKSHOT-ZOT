@@ -48,6 +48,59 @@ GRAPHICS_KEYS = (
     "vram_budget",
 )
 VALUE = re.compile(r"[A-Za-z0-9x._ -]{0,64}$")
+# Each key's row name and its choices as the menu shows them (gpu/vk/vk_menu.cpp: the rows' names and their tx_
+# functions' tables; tests/test_enh_graphics.py checks the tables against the source). A key not here, or a number past
+# its list, is shown as it is in the file; units are added for the rows that are numbers.
+ROWS = {
+    "quality_preset": ("Quality preset", ["Custom", "Minimum (4GB)", "Low (6GB)", "Balanced (8GB)", "High (12GB)",
+                                          "Ultra (16GB+)", "Auto (this PC)"]),
+    "ultrawide": ("Aspect ratio", ["Output resolution's own shape", "Monitor's shape"]),
+    "output_res": ("Output resolution", None),
+    "handheld_profile": ("Profile", ["Docked", "Handheld"]),
+    "dlss": ("Upscaler", ["Game's own", "NVIDIA DLSS", "NVIDIA DLAA", "AMD FSR 3.1", "AMD FSR 4", "AMD FSR 4 Native AA",
+                          "Off (no upscaling)"]),
+    "dlss_model": ("DLSS model", ["Transformer (K)", "Transformer 2 (M)", "Transformer 2 (L)", "NVIDIA default"]),
+    "resolution": ("Render resolution", ["Auto", "100%", "75%", "67%", "50%", "58%", "33%", "42%", "83%", "92%"]),
+    "sharpness": ("Sharpness", "%"),
+    "frame_generation": ("Frame generation", ["Off", "Auto", "2x", "3x", "4x", "5x", "6x", "7x", "8x"]),
+    "frame_generation_by": ("Frame generation by", ["Auto", "Built-in FG"]),
+    "frame_pacing": ("Frame pacing", ["Off", "On"]),
+    "frame_rate_cap": ("Game frame rate cap", ["60 (the console's)", "90", "120", "144", "165", "240", "Uncapped", "30"]),
+    "nvidia_reflex": ("NVIDIA Reflex", ["Off", "On", "On + Boost"]),
+    "amd_anti-lag_2": ("AMD Anti-Lag 2", ["Off", "On"]),
+    "fullscreen": ("Fullscreen", ["Off", "On"]),
+    "vsync": ("V-Sync", ["Auto", "On", "Off"]),
+    "upscaling": ("Window scaling filter", ["Off", "Catmull-Rom", "Lanczos"]),
+    "ultrawide_menus": ("Ultrawide menus", ["Full width", "Centred, blurred sides", "Centred, black bars"]),
+    "hdr": ("HDR", ["Off", "Expanded", "Native (the game's)"]),
+    "hdr_paper_white": ("HDR paper white", " nits"),
+    "hdr_peak_brightness": ("HDR peak brightness", " nits"),
+    "hdr_contrast": ("HDR contrast", "%"),
+    "hdr_tone_mapper": ("HDR tone mapper", ["Vanilla", "PsychoV35"]),
+    "texture_detail": ("Texture detail", ["Auto", "Full", "Medium", "Low"]),
+    "anisotropic_filtering": ("Anisotropic filtering", ["Game's", "2x", "4x", "8x", "16x"]),
+    "gpu_device": ("GPU device", None),
+    "threaded_rendering": ("Threaded rendering", ["Auto", "On", "Off"]),
+    "vram_budget": ("VRAM budget", ["Auto", "2.2 GB (4GB preset)", "3.6 GB", "4.8 GB", "6 GB", "7.5 GB", "9 GB", "11 GB"]),
+}
+
+
+def row_name(key):
+    return ROWS.get(key, (key, None))[0]
+
+
+def label(key, value):
+    """value (as the file has it) as the menu shows it"""
+    if value is None:
+        return "(none)"
+    choices = ROWS.get(key, (key, None))[1]
+    if key == "gpu_device":
+        return "Auto" if value == "0" else "card %s" % value
+    if isinstance(choices, str):
+        return value + choices
+    if isinstance(choices, list) and value.isdigit() and int(value) < len(choices):
+        return choices[int(value)]
+    return value
 
 
 def default_store():
@@ -179,8 +232,8 @@ def cmd_list(args, store):
     for n in names:
         try:
             v = read_profile(store, n)
-            print("  %-24s %s, upscaler %s, cap %s, HDR %s" % (n, v.get("output_res", "?"), v.get("dlss", "?"),
-                                                              v.get("frame_rate_cap", "?"), v.get("hdr", "?")))
+            print("  %-24s %s, %s, %s FPS, HDR %s" % (n, v.get("output_res", "?"), label("dlss", v.get("dlss")),
+                                                     label("frame_rate_cap", v.get("frame_rate_cap")), label("hdr", v.get("hdr"))))
         except Fail as e:
             print("  %-24s (unreadable: %s)" % (n, e))
     if not names:
@@ -189,7 +242,7 @@ def cmd_list(args, store):
 
 def cmd_show(args, store):
     for k, v in read_profile(store, args.name).items():
-        print("%s=%s" % (k, v))
+        print("  %-24s %s" % (row_name(k), label(k, v)))
 
 
 def cmd_diff(args, store):
@@ -198,7 +251,7 @@ def cmd_diff(args, store):
     if not diff:
         print("The game already has profile %s's settings" % args.name)
     for k, old, new in diff:
-        print("  %-22s %s -> %s" % (k, old if old is not None else "(none)", new))
+        print("  %-24s %s -> %s" % (row_name(k), label(k, old), label(k, new)))
 
 
 def cmd_apply(args, store):
@@ -210,7 +263,7 @@ def cmd_apply(args, store):
         print("The game already has profile %s's settings: nothing to do" % args.name)
         return
     for k, old, new in diff:
-        print("  %-22s %s -> %s" % (k, old if old is not None else "(none)", new))
+        print("  %-24s %s -> %s" % (row_name(k), label(k, old), label(k, new)))
     if args.dry_run:
         print("Dry run: nothing was changed")
         return

@@ -4,7 +4,9 @@ hookshot_options.ini in a temp folder; the running-game check replaced.
 - GRAPHICS_KEYS is exactly the Insert menu's Graphics rows as gpu/vk/vk_menu.cpp saves them (its rows and ini_key);
 - save keeps only the Graphics lines; apply changes only them, keeps every other line and its order, appends missing
   keys, merges a repeated key, backs the file up first, and leaves the file alone on a dry run or while a game runs;
-- names and values that are not a profile's are refused.
+- names and values that are not a profile's are refused;
+- the labels shown are the menu's: each row's name, and the choices of the rows with a table in gpu/vk/vk_menu.cpp
+  (and Render resolution's percents from gpu/vk/upscaler_rows.h) as the source has them.
 
 python -I -B tests/test_enh_graphics.py
 """
@@ -73,6 +75,32 @@ class GraphicsProfileTests(unittest.TestCase):
     def test_keys_are_the_menus_graphics_rows(self):
         self.assertEqual(list(zg.GRAPHICS_KEYS), menu_graphics_keys())
 
+    def test_labels_are_the_menus(self):
+        menu = (ROOT / "gpu" / "vk" / "vk_menu.cpp").read_text(encoding="utf-8")
+        names = [n for n, _ in re.findall(r'\{TAB_GRAPHICS, "([^"]+)", &opts\.(\w+)', menu)]
+        self.assertEqual(list(zg.ROWS), list(zg.GRAPHICS_KEYS))
+        self.assertEqual([zg.row_name(k) for k in zg.GRAPHICS_KEYS], names)
+
+        def table(fn):
+            body = menu[menu.index("const char* %s(int" % fn):]
+            body = body[:body.index("\n}")]
+            return re.findall(r'"([^"]*)"', body[body.index("{", body.index("t")):body.index("};")])
+        for key, fn in (("quality_preset", "tx_preset"), ("dlss", "tx_upscaler"), ("dlss_model", "tx_dlss_model"),
+                        ("frame_rate_cap", "tx_fps_cap"), ("nvidia_reflex", "tx_reflex"), ("vsync", "tx_vsync"),
+                        ("upscaling", "tx_upscale"), ("ultrawide_menus", "tx_wide_menus"),
+                        ("texture_detail", "tx_texture_detail"), ("anisotropic_filtering", "tx_anisotropy"),
+                        ("vram_budget", "tx_vram_budget")):
+            self.assertEqual(zg.ROWS[key][1], table(fn), key)
+        framegen = menu[menu.index("const char* tx_framegen(int v)"):]
+        self.assertEqual(zg.ROWS["frame_generation"][1], re.findall(r'"([^"]*)"', framegen[:framegen.index("};")]))
+        rows = (ROOT / "gpu" / "vk" / "upscaler_rows.h").read_text(encoding="utf-8")
+        percents = [int(x) for x in re.search(r"kPercent\[\] = \{([^}]*)\}", rows).group(1).split(",")]
+        self.assertEqual(zg.ROWS["resolution"][1], ["Auto"] + ["%d%%" % p for p in percents[1:]])
+        self.assertEqual(zg.label("frame_rate_cap", "2"), "120")
+        self.assertEqual(zg.label("hdr_peak_brightness", "1000"), "1000 nits")
+        self.assertEqual(zg.label("dlss", "99"), "99")
+        self.assertEqual(zg.label("dlss", None), "(none)")
+
     def test_save_keeps_only_graphics(self):
         code, _, err = self.cli("save", "4K", "--game", str(self.game))
         self.assertEqual(code, 0, err)
@@ -114,7 +142,7 @@ class GraphicsProfileTests(unittest.TestCase):
         before = self.ini.read_text(encoding="utf-8")
         code, out, _ = self.cli("apply", "p", "--game", str(self.game), "--dry-run")
         self.assertEqual(code, 0)
-        self.assertIn("hdr", out)
+        self.assertIn("HDR                      Native (the game's) -> Off", out)
         self.assertEqual(self.ini.read_text(encoding="utf-8"), before)
         with mock.patch.object(zg.oot, "running_games", return_value=["Hookshot"]):
             code, _, err = self.cli("apply", "p", "--game", str(self.game))
@@ -134,7 +162,7 @@ class GraphicsProfileTests(unittest.TestCase):
         self.cli("save", "Perf 120", "--game", str(self.game))
         code, out, _ = self.cli("list")
         self.assertIn("Perf 120", out)
-        self.assertIn("output_res=2560x1440", self.cli("show", "Perf 120")[1])
+        self.assertIn("2560x1440", self.cli("show", "Perf 120")[1])
         self.assertIn("already", self.cli("diff", "Perf 120", "--game", str(self.game))[1])
         self.assertEqual(self.cli("delete", "Perf 120")[0], 0)
         self.assertEqual(self.cli("show", "Perf 120")[0], 1)
