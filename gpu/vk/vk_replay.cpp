@@ -5990,6 +5990,10 @@ void fill_replay_table(MkwVkRenderer& t) {
         if (id == HOS_OPT_MUTE_BACKGROUND) return opts.mute_background;
         if (id == HOS_OPT_DISABLE_CAMERA_CENTERING) return opts.disable_camera_centering;
         if (id == HOS_OPT_AUTO_RUN) return opts.auto_run;   // (host/nn_hid.c and host/auto_run.h)
+        // (enhanced) the PlayStation pad rows (host/enh_dualsense.c)
+        if (id == HOS_OPT_ENH_LIGHTBAR) return opts.enh_lightbar;
+        if (id == HOS_OPT_ENH_LOW_LIFE_RUMBLE) return opts.enh_low_life_rumble;
+        if (id == HOS_OPT_ENH_TRIGGERS) return opts.enh_triggers;
         if (id == HOS_OPT_TEXT_SIZE) return opts.text_size;
         if (id == HOS_OPT_CAMERA_SPEED) return opts.camera_speed;
         if (id == HOS_OPT_PROMPTS) return opts.prompts;

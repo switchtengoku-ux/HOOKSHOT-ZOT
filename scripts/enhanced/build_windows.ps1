@@ -43,6 +43,12 @@ if (-not (Test-Path (Join-Path $workFiles "hot_funcs.txt"))) {
     Copy-Item (Join-Path $tools "work\*") $workFiles -Recurse
 }
 
+# (the variables below are put back as they were at the end: a later command in the same session, the tests above
+# all, must not run with the build's TEMP, DLSS SDK or headers)
+$names = @("TEMP", "TMP", "PYTHONIOENCODING", "HOOKSHOT_MINGW", "EMSDK", "RX_CPM", "WGPU_NATIVE",
+           "HOOKSHOT_NO_UPDATE_CHECK", "HOOKSHOT_NGX_SDK")
+$saved = @{}
+foreach ($n in $names) { $saved[$n] = [Environment]::GetEnvironmentVariable($n, "Process") }
 New-Item -ItemType Directory -Force (Join-Path $Work "tmp") | Out-Null
 $env:TEMP = Join-Path $Work "tmp"
 $env:TMP = $env:TEMP
@@ -65,4 +71,5 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "make_game.py failed (exit $LASTEXITCODE): see $(Join-Path $Work 'build.log')" }
 } finally {
     Pop-Location
+    foreach ($n in $names) { [Environment]::SetEnvironmentVariable($n, $saved[$n], "Process") }
 }

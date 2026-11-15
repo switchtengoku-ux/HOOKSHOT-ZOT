@@ -10,7 +10,9 @@ host/enh_dualsense.c). The header is compiled and checked, with no pad and no ga
 - the trigger effect block: 47 bytes, only the trigger bits enabled (rumble and lights untouched), the clear effect
   for Off, a constant resistance for Light and Strong, the same on both triggers.
 
-Also checks that host/pad_sdl.c and host/hos_main.c call into it at the places the feature needs, marked (enhanced).
+Also checks that host/pad_sdl.c and host/hos_main.c call into it at the places the feature needs, marked (enhanced),
+and that the Insert menu has its three Controls rows with enh_ keys in hookshot_options.ini, answered by the
+renderer's option callback under IDs past upstream's reserved 60.
 
 python -I -B tests/test_enh_dualsense.py [--cc clang]
 """
@@ -96,6 +98,18 @@ def main():
     assert "hos_enh_set_life(life, max_life)" in main_c, "host/hos_main.c no longer hands Link's life over"
     for text, name in ((pad, "pad_sdl.c"), (main_c, "hos_main.c")):
         assert "(enhanced)" in text, "host/%s: the fork's edits are not marked (enhanced)" % name
+    # the menu rows, their ini keys and their option IDs
+    menu = (ROOT / "gpu" / "vk" / "vk_menu.cpp").read_text(encoding="utf-8")
+    replay = (ROOT / "gpu" / "vk" / "vk_replay.cpp").read_text(encoding="utf-8")
+    api = (ROOT / "gpu" / "vk" / "vk_api.h").read_text(encoding="utf-8")
+    for row, field, key, opt in (("Lightbar", "enh_lightbar", "enh_lightbar", "HOS_OPT_ENH_LIGHTBAR"),
+                                 ("Low-life pulse", "enh_low_life_rumble", "enh_low_life_rumble", "HOS_OPT_ENH_LOW_LIFE_RUMBLE"),
+                                 ("Adaptive triggers", "enh_triggers", "enh_triggers", "HOS_OPT_ENH_TRIGGERS")):
+        assert '{TAB_CONTROLS, "%s", &opts.%s,' % (row, field) in menu, "vk_menu.cpp: no %s row" % row
+        assert '!strcmp(r.name, "%s")) return "%s";' % (row, key) in menu, "vk_menu.cpp: %s has no enh_ key" % row
+        assert "if (id == %s) return opts.%s;" % (opt, field) in replay, "vk_replay.cpp does not answer %s" % opt
+        assert opt in api, "vk_api.h has no %s" % opt
+    assert "HOS_OPT_ENH_LIGHTBAR = 61" in api, "the fork's option IDs start past upstream's reserved 60"
     with tempfile.TemporaryDirectory() as tmp:
         src, exe = Path(tmp) / "fixture.c", Path(tmp) / "fixture.exe"
         src.write_text(FIXTURE, encoding="utf-8")

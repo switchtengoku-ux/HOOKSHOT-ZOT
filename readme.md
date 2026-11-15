@@ -383,6 +383,9 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | Stick dead zone | Default (24%), 5%, 10%, 15%, 20%, 30% | Default (24%) |
 | | Auto run | Off, On | Off |
 | | Rumble strength | Off, 25% to 150%, in steps of 25 | 100% |
+| | Lightbar | Off, Hearts (Hookshot Enhanced: DualSense and DualShock 4 show Link's life) | Off |
+| | Low-life pulse | Off, On (Hookshot Enhanced: a pulse at each red blink, with the Lightbar on Hearts) | On |
+| | Adaptive triggers | Off, Light, Strong (Hookshot Enhanced: DualSense L2 and R2 resistance) | Off |
 | | Layout preset | Nintendo (Def), Xbox / PC, Swap Face, Custom (on the Controls page) | Nintendo (Def) |
 | | Button prompts | Auto, Switch, Xbox, PlayStation 4, PlayStation 5, Steam Deck (on the Controls page) | Auto |
 | | Motion | Opens the Motion page: Motion controls (Off, On; On), Motion sensitivity X (10% to 600%) and Y (10% to 300%; 100%), Invert motion X and Y (Off, On; Off), Motion deadzone (Low, Standard, High; Standard) | |
