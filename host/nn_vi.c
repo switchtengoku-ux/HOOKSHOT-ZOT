@@ -457,9 +457,12 @@ static void realtime_step(int64_t now) {
         const float f = (float)(secs > 4.0 / 60.0 ? 4.0 / 60.0 : secs < shortest ? shortest : secs);
         uint32_t bits;
         memcpy(&bits, &f, 4);
-        __atomic_store_n(&hos_frame_seconds_bits, bits, __ATOMIC_RELAXED);   /* (read by the game's threads) */
+        /* (enhanced) the photo mode's still world: host/enh_photo.c (weak: without it, the step as it is) */
+        extern uint32_t hos_enh_step_bits(uint32_t bits) __attribute__((weak));
+        __atomic_store_n(&hos_frame_seconds_bits, hos_enh_step_bits ? hos_enh_step_bits(bits) : bits, __ATOMIC_RELAXED);   /* (read by the game's threads) */
     } else {
-        __atomic_store_n(&hos_frame_seconds_bits, 0, __ATOMIC_RELAXED);
+        extern uint32_t hos_enh_step_bits(uint32_t bits) __attribute__((weak));   /* (enhanced) as above */
+        __atomic_store_n(&hos_frame_seconds_bits, hos_enh_step_bits ? hos_enh_step_bits(0) : 0, __ATOMIC_RELAXED);
     }
     const int top = timed ? 60 : fps_max();
     const double ratio = sum / count * 60.0;
