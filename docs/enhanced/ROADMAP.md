@@ -15,6 +15,6 @@ implement, test against [TEST_BASELINE.md](TEST_BASELINE.md), document, commit.
 | 7 | Performance recording: from the menu or a key, P95/P99, session report | Postponed (performance is fine for now) | Ideas from XC3's `perfmon.c`; code in `gpu/vk/vk_fps.cpp` |
 | 8 | Mod manager tool over the existing loader: list, enable/disable, conflicts, profiles | Done: a tool ([MOD_MANAGER.md](MOD_MANAGER.md)); a Mods tab later | No second loader: `host/mods.c`'s rules |
 | 9 | Named graphics profiles | Done: a tool and two Graphics rows in the menu ([GRAPHICS_PROFILES.md](GRAPHICS_PROFILES.md)) | A tool over `hookshot_options.ini` first |
-| 10 | HUD editor | Research | `host/hos_wide_ui.c` sees every HUD pane's transform; opacity is unknown |
-| 11 | Photo mode | Research | Free camera exists in the debug tools; HUD hide to find |
+| 10 | HUD editor | Studied: hiding works (photo mode); per-element editor is phase 3 ([PHOTO_MODE.md](PHOTO_MODE.md)) | `host/hos_wide_ui.c` sees every HUD pane's transform; opacity is unknown |
+| 11 | Photo mode | Done: phases 1 and 2 ([PHOTO_MODE.md](PHOTO_MODE.md)); no depth of field | Free camera exists in the debug tools; HUD hide to find |
 | 12 | Stabilization and a first release | Later | Needs the launcher/updater decision ([UPSTREAM_SYNC.md](UPSTREAM_SYNC.md)) |

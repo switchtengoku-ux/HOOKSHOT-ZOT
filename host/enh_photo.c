@@ -1,5 +1,11 @@
-/* (enhanced) Hookshot Enhanced, photo mode prototype (docs/enhanced/PHOTO_MODE.md): the HUD hidden, and the world held
-   still, each from a switch at the start or a key in play.
+/* (enhanced) Hookshot Enhanced, photo mode (docs/enhanced/PHOTO_MODE.md), the host's side: the HUD hidden, the world held
+   still and the free camera, each from a switch or a key, and all three while the photo mode is on.
+
+   The photo mode (F8, or the Insert menu's Gameplay row Photo mode) lives in the renderer (gpu/vk/enh_photo.cpp); its
+   state is read here every present (HOS_OPT_ENH_PHOTO). While it is on, the HUD is hidden, the world held still and the
+   debug tools' free camera moves the view (host/hos_main.c hos_oot_free_view and host/nn_hid.c ask hos_enh_photo_camera),
+   whether the debug tools are on or not; the game gets no buttons. F9, or the row Take a photo, saves a PNG of the
+   picture at its own size (gpu/vk/enh_photo_shot.inc).
 
    HUD hidden (HOOKSHOT_ENH_HUD_HIDE=1, or F6): host/hos_wide_ui.c hos_wide_ui_placed hands every 2D pane whose transform
    the game has just made to hos_enh_hud_placed. A root pane (no parent) of one of the HUD's layouts (ENH_HUD_LAYOUTS, the
@@ -15,9 +21,12 @@
 
    The keys count only while the game's window has the focus, on Windows.
    HOOKSHOT_ENH_PHOTO_FILE=<path> (for driven test runs, which cannot press keys): while that file exists, it is read every
-   half second and sets both, "hud=1" and "freeze=1" in it on (anything else off). */
+   half second: "hud=1" and "freeze=1" in it switch those on (anything else off); "photo=1" or "photo=0" sets the photo
+   mode; "shot=<n>", a number other than the last one read, asks a photo (rx_option_set: gpu/vk/vk_menu.cpp
+   menu_option_set). */
 #include <stdio.h>
 #include "hos.h"
+#include "../gpu/vk/vk_api.h"   /* (HOS_OPT_ENH_PHOTO) */
 #include <stdlib.h>
 #include <string.h>
 #ifdef _WIN32
@@ -31,7 +40,12 @@ enum { ENH_LAYOUT_RES = 0xf8, ENH_RES_NAME = 0x18, ENH_PANE_LAYOUT = 0x18, ENH_P
 static const char *const ENH_HUD_LAYOUTS[] = {"PlayerStatus_00", "Location_00", "MapMenu_00", "Talk_00", "MessageLog_01",
                                               "PlayerStatus3D_00", "Pointer_00", "BalloonMessage_00"};
 
-static volatile int hud_hidden, frozen, read_switches;
+static volatile int hud_hidden, frozen, read_switches;   /* (the switches and keys F6, F7 alone) */
+static volatile int photo_on;                            /* (the photo mode: all three) */
+int rx_option(int id, int otherwise);   /* host/rx_backend.c */
+
+/* the free camera's view and sticks while the photo mode is on (weak in host/hos_main.c and host/nn_hid.c) */
+int hos_enh_photo_camera(void) { return photo_on; }
 
 static int env_set(const char *name) {
     const char *v = getenv(name);
@@ -50,7 +64,7 @@ static void switches(void) {
 
 int hos_enh_hud_hidden(void) {
     switches();
-    return hud_hidden;
+    return hud_hidden || photo_on;
 }
 
 static void set_hud(int on) {
@@ -69,6 +83,15 @@ static void set_frozen(int on) {
 /* Each present (hos_wide_ui_tick): F6 and F7, pressed while the game has the focus; the test file */
 void hos_enh_photo_tick(void) {
     switches();
+    {   /* (the photo mode, the renderer's: its change remakes the panes, as the HUD switch does) */
+        const int on = rx_option(HOS_OPT_ENH_PHOTO, 0) != 0;
+        if (on != photo_on) {
+            photo_on = on;
+            extern volatile uint32_t hos_wide_ui_force;
+            hos_wide_ui_force = 3;
+            hos_log("enhanced: photo mode %s: HUD, world and camera %s", on ? "on" : "off", on ? "taken" : "given back");
+        }
+    }
     static const char *file;
     static int looked;
     static int64_t next;
@@ -83,6 +106,16 @@ void hos_enh_photo_tick(void) {
             text[n] = 0;
             set_hud(strstr(text, "hud=1") != NULL);
             set_frozen(strstr(text, "freeze=1") != NULL);
+            void rx_option_set(int id, int value);   /* host/rx_backend.c */
+            static int last_photo = -1, last_shot = -1;
+            const int want = strstr(text, "photo=1") ? 1 : strstr(text, "photo=0") ? 0 : -1;
+            if (want >= 0 && want != last_photo) rx_option_set(HOS_OPT_ENH_PHOTO, want), last_photo = want;
+            const char *shot = strstr(text, "shot=");
+            const int shot_n = shot ? atoi(shot + 5) : -1;
+            if (shot_n >= 0 && shot_n != last_shot) {
+                if (last_shot >= 0) rx_option_set(HOS_OPT_ENH_PHOTO, 2);   /* (the first number read is the start) */
+                last_shot = shot_n;
+            }
         }
     }
 #ifdef _WIN32
@@ -109,7 +142,7 @@ static int guest_name_is(uint64_t g, const char *want) {
 /* A pane's transform just made (host/hos_wide_ui.c hos_wide_ui_placed, before its own moves): a HUD layout's root made a
    point while the HUD is hidden */
 void hos_enh_hud_placed(Ctx *c, uint64_t pane, uint64_t parent) {
-    if (!hud_hidden || parent || !pane) return;
+    if (!(hud_hidden || photo_on) || parent || !pane) return;
     const uint64_t layout = recomp_load64(c, pane + ENH_PANE_LAYOUT);
     const uint64_t res = layout ? recomp_load64(c, layout + ENH_LAYOUT_RES) : 0;
     const uint64_t name = res ? recomp_load64(c, res + ENH_RES_NAME) : 0;
@@ -122,7 +155,7 @@ void hos_enh_hud_placed(Ctx *c, uint64_t pane, uint64_t parent) {
 
 /* host/nn_vi.c: the frame step handed to the game, as a float's bits (0: the game's own) */
 uint32_t hos_enh_step_bits(uint32_t bits) {
-    if (!frozen) return bits;
+    if (!frozen && !photo_on) return bits;
     const float f = ENH_FREEZE_SECONDS;
     uint32_t b;
     memcpy(&b, &f, 4);

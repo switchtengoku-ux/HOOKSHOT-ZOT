@@ -42,9 +42,36 @@ these files alone (`test_wide_ui`, `test_hud_layout`, `test_frame_rate_cap_step`
 - How cutscenes, menus and the text box behave with the HUD hidden or the world held.
 - A pane's opacity (for the HUD editor): where the game keeps it.
 
+## Phase 2: the photo mode
+
+| How | What |
+|---|---|
+| **F8**, or Insert menu → Gameplay → **Photo mode** (A or Enter) | The photo mode on or off. On: the HUD hidden, the world held still, the free camera on the usual controls (sticks or movement keys; R and L, or Page Up and Page Down, its height; Ctrl faster), and the game gets no buttons. Switched on from the menu, the menu closes |
+| **F9**, or Gameplay → **Take a photo** | A PNG of the game's picture, without the Insert menu, at its own size (3440x1440 at a 21:9 output), in the user's Pictures folder as Windows knows it (`SHGetKnownFolderPath`: moved to OneDrive, it is there), under `Hookshot`, as `Hookshot_<date>_<time>.png`. The row's help then says "Photo saved." |
+| Gameplay → Field of view | The view's width, live, as before |
+
+The free camera is the debug tools' (`host/hos_main.c` `oot_build_free_view`), turned on by the photo mode without the
+debug tools. It moves while the game's window has the focus.
+
+How it is built:
+- `gpu/vk/enh_photo.cpp` / `.h` (new): the photo mode's state, the photos asked for, F8 and F9.
+- `gpu/vk/enh_photo_shot.inc` (new, in `vk_replay.cpp` after `shot_ask_take`): the photo at the presented crop's size,
+  its image and buffer made for it and let go after, read back without a wait, written on a thread of its own.
+- `gpu/vk/enh_menu_photo.inc` (new, in `vk_menu.cpp`): the two rows' cells and presses; their texts are in
+  `vk_menu.cpp` and in French in `menu_i18n.h`.
+- `host/enh_photo.c`: reads the photo mode every present (`HOS_OPT_ENH_PHOTO` 66) and from it hides the HUD, holds the
+  world and answers `hos_enh_photo_camera` (weak in `host/hos_main.c` and `host/nn_hid.c`).
+- `vk_replay.cpp`, `vk_menu.cpp`, `vk_api.h`, `readme.md`: small hooks marked `(enhanced)`.
+- `HOOKSHOT_ENH_PHOTO_FILE` also takes `photo=1|0` and `shot=<n>` for driven test runs.
+
+Checked in a driven run (2026-11-15): photo mode on hides the HUD and holds Link and the world; a photo came out at
+3440x1440 without the HUD; off gives the HUD back. The free camera switched on but could not be moved there (a run
+without a window has no focus): to check in play.
+
+Limits: an HDR picture is written as its 8-bit values, not tone mapped; the photo is the output size (a larger one needs
+a larger Output resolution); no depth of field.
+
 ## Next
 
-- Phase 2, photo mode: one switch (key or menu row) for the HUD hidden, the free camera, the world held, the field of
-  view, and a capture key writing PNGs to `Pictures\Hookshot`; English and French.
 - Phase 3, HUD editor: a menu page with each HUD element (hearts and magic, rupees, buttons, minimap, place name)
   shown or hidden, its size and its offset, and back to the game's own.

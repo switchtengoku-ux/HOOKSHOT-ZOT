@@ -1170,13 +1170,17 @@ static void npad_states(Ctx *c) {
         /* Pause/map must release shield/aim before the game's menu reads input. */
         const uint64_t pause = buttons & ~toggles.previous & ((1ULL << B_PLUS) | (1ULL << B_MINUS));
         buttons = hold_toggle_apply(&toggles, buttons, enabled, reset || pause);
-        const int free_camera = rx_option(HOS_OPT_CHEAT_CAMERA, 0);
+        /* (enhanced) the photo mode's free camera takes the sticks too, and the game gets no buttons (host/enh_photo.c) */
+        extern int hos_enh_photo_camera(void) __attribute__((weak));
+        const int photo = hos_enh_photo_camera && hos_enh_photo_camera();
+        const int free_camera = rx_option(HOS_OPT_CHEAT_CAMERA, 0) || photo;
         const int flying = flight_jump_shortcut(&buttons, rx_option(HOS_OPT_CHEAT_FLIGHT, -1), menu_open, free_camera);
         if (free_camera && !menu_open) {
             for (int i = 0; i < 4; i++) axes |= (uint64_t)(uint16_t)stick[i] << (16 * i);
             height = (int)(buttons >> B_R & 1) - (int)(buttons >> B_L & 1);
             memset(stick, 0, sizeof stick);
             buttons &= ~((1ULL << B_L) | (1ULL << B_R));
+            if (photo) buttons = 0;   /* (enhanced) */
         } else if (flying && !menu_open) {
             const uint64_t climb = (1ULL << B_B) | (1ULL << B_R);
             const int vertical = !!(buttons & climb) - (int)(buttons >> B_L & 1);

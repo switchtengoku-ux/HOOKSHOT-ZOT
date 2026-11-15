@@ -29,6 +29,7 @@
 #include <vector>
 #include <algorithm>    // (enhanced) enh_graphics_profiles.inc
 #include <filesystem>
+#include "enh_photo.h"   // (enhanced) the photo mode's state: enh_menu_photo.inc
 
 #include "vk_paths.h"
 #include "vk_menu.h"
@@ -849,7 +850,8 @@ const char* const enh_profile_texts[] = {
     "None saved", "Profile loaded.", "Profile saved.", "No profile saved yet: type a name in Save profile as.",
     "That profile could not be read.", "A name: letters, digits, spaces, - or _, a letter or digit first.",
     "No folder to keep profiles in (LOCALAPPDATA is not set).", "The options file could not be read.",
-    "The profile could not be written."};
+    "The profile could not be written.",
+    "Take", "Photo saved.", "The photo could not be saved."};   // (the photo mode's: enh_menu_photo.inc, enh_photo.cpp)
 
 const char* tx_stick_dead_zone(int v) {
     static const char* t[] = {"Default (24%)", "5%", "10%", "15%", "20%", "30%"};
@@ -1429,6 +1431,12 @@ Row rows[] = {
     {TAB_GAMEPLAY, "Field of view", &opts.fov, 50, 150, 5, tx_fov,
      "How much of the world you see: 100% is the original view. Higher is wider, lower is closer. Changes apply at once "
      "during gameplay. Cutscenes keep their own view.", nullptr, false, true},
+    // (enhanced) the photo mode (enh_menu_photo.inc, gpu/vk/enh_photo.cpp, host/enh_photo.c): rows that act, as Bug report
+    {TAB_GAMEPLAY, "Photo mode", nullptr, 0, 0, 0, nullptr,
+     "Hides the HUD, holds the world still and moves the camera freely with your usual controls; R and L, or Page Up "
+     "and Page Down, change its height. A or Enter switches it, F8 too in play."},
+    {TAB_GAMEPLAY, "Take a photo", nullptr, 0, 0, 0, nullptr,
+     "Saves the game's picture, without this menu, at its full size as a PNG in Pictures\\Hookshot. F9 too in play."},
     {TAB_GAMEPLAY, "Text speed", &opts.text_speed, 0, 3, 1, tx_text_speed,
      "How fast the letters of dialogue and other messages appear.", hn_text_speed, false, true},
     {TAB_GAMEPLAY, "Text size", &opts.text_size, 0, 4, 1, tx_text_size,
@@ -2745,6 +2753,7 @@ struct FieldRow {
     const char* (*apply)();
 };
 #include "enh_graphics_profiles.inc"   // (enhanced) graphics profiles: the row's load, the field's save
+#include "enh_menu_photo.inc"          // (enhanced) the photo mode's rows
 const FieldRow field_rows[] = {{"Custom output size", &output_field, output_field_apply}};
 /// A row that is a text field (a row with no value, by its name, as is_motion_row): its field and apply; nullptr any other
 const FieldRow* field_row(const Row& r) {
@@ -3477,6 +3486,7 @@ void row_value_cell(ui::Ctx& c, const Row& r, ImVec2 va, ImVec2 vb, bool selecte
         if (pending == &r) choice_cell(c, va, vb, "Press again to confirm", selected, false, false);
         else if (is_share_row(r)) choice_cell(c, va, vb, share_value.empty() ? "Save" : share_value, selected, false, false);   // (an action, not a page)
         else if (&r == &rows[kBugReportRow]) choice_cell(c, va, vb, bug_report_cell(), selected, false, false);   // (how the last report went)
+        else if (enh_photo_row(r)) choice_cell(c, va, vb, enh_photo_cell(r), selected, false, false);   // (enhanced) the photo mode
         else {
             choice_cell(c, va, vb, "", selected, false, false);
             ui::triangle(c, ImVec2(vb.x - 15 * s, mid), 10 * s, 1, selected ? ui::kGoldInk : ui::kInk);
@@ -3553,6 +3563,7 @@ void draw_options(ui::Ctx& c) {
     if (&selr == &rows[kBugReportRow]) hint = bug_report_hint();   // (the Bug report: where it was saved, or why not)
     if (enh_profile_said && (enh_profile_row(selr) || &enh_profile_field == (field ? field->field : nullptr)))   // (enhanced)
         hint = enh_profile_said;
+    if (enh_photo_take_row(selr) && enh_photo_said()) hint = enh_photo_said();   // (enhanced) what the last photo did
     const std::string pending_line = (cur_tab == TAB_GRAPHICS || cur_tab == TAB_DEBUG) && restart_pending() ? restart_line(c, 16 * s, hx1 - hx0 - 66 * s) : "";
     static float help_tall = 0, help_tall_w = 0;
     static std::string help_said;   // (Save my pipeline list's line as measured: measured again when it changes)
@@ -4904,6 +4915,11 @@ bool fps_take(int64_t now, int64_t shown, int64_t game, int64_t* next, int64_t* 
 // inside menu_tick's frame on the same thread does not lock itself out
 std::recursive_mutex menu_mu;
 void menu_option_set(int id, int value) {
+    if (id == HOS_OPT_ENH_PHOTO) {   // (enhanced) the host's test file (host/enh_photo.c): 0 or 1 the photo mode, 2 a photo
+        if (value == 2) enh_photo_ask();
+        else enh_photo_set(value);
+        return;
+    }
     if (id == OOT_CHEAT_AGE_ID) {   // (Link's age: the Switch age row shows it)
         if (link_age.exchange(value, std::memory_order_relaxed) != value && page == 0 && cur_tab == TAB_DEBUG) menu_refresh = true;
         return;
@@ -5731,6 +5747,7 @@ void menu_tick() {
         else if (press[7] && is_laptop_row(r)) weak_laptop_apply(), press[7] = false, changed = true;
         else if (press[7] && &r == &rows[kBugReportRow]) bug_report_save(), press[7] = false, changed = true;
         else if (press[7] && enh_profile_row(r)) enh_profile_load(), press[7] = false, changed = true;   // (enhanced)
+        else if (press[7] && enh_photo_row(r)) enh_photo_press(r), press[7] = false, changed = true;   // (enhanced)
         else if (const FieldRow* f = press[7] ? field_row(r) : nullptr) edit_start(*f->field, f->apply), changed = true;   // (hookshot)
         else if (press[7] && !r.value && can_bind()) page = 1, csel = 0, ccol = menu_hit::kCtlPrimary, changed = true;
         if ((press[3] || press[4] || press[7]) && r.value) {   // (Enter, or A, as Right)
