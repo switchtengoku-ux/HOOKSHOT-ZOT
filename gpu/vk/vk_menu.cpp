@@ -27,6 +27,8 @@
 #include <thread>
 #include <system_error>
 #include <vector>
+#include <algorithm>    // (enhanced) enh_graphics_profiles.inc
+#include <filesystem>
 
 #include "vk_paths.h"
 #include "vk_menu.h"
@@ -841,6 +843,13 @@ const char* tx_auto_run(int v) { return v ? "On" : "Off"; }
 const char* tx_enh_lightbar(int v) { return v ? "Hearts" : "Off"; }
 const char* tx_enh_low_life_rumble(int v) { return v ? "On" : "Off"; }
 const char* tx_enh_triggers(int v) { return v == 2 ? "Strong" : v == 1 ? "Light" : "Off"; }
+const char* tx_enh_profile(int v);   // (enhanced) the Graphics profile row: enh_graphics_profiles.inc
+// (enhanced) its texts, here so that menu_i18n.h translates them (tests/test_menu_i18n.py reads this file): ENH_PROFILE_*
+const char* const enh_profile_texts[] = {
+    "None saved", "Profile loaded.", "Profile saved.", "No profile saved yet: type a name in Save profile as.",
+    "That profile could not be read.", "A name: letters, digits, spaces, - or _, a letter or digit first.",
+    "No folder to keep profiles in (LOCALAPPDATA is not set).", "The options file could not be read.",
+    "The profile could not be written."};
 
 const char* tx_stick_dead_zone(int v) {
     static const char* t[] = {"Default (24%)", "5%", "10%", "15%", "20%", "30%"};
@@ -1290,6 +1299,13 @@ Row rows[] = {
      hn_preset},
     // (the picture's way, top to bottom: the output's size, what fills it from the 3D, the 3D's size, its sharpening; then
     // the frames, and the window it is shown in)
+    // (enhanced) graphics profiles (enh_graphics_profiles.inc): A or Enter on Graphics profile loads it; Save profile as saves (beside the Quality preset, before the sections: tests/test_menu_sections.py)
+    {TAB_GRAPHICS, "Graphics profile", &opts.enh_gfx_profile, 0, 0, 1, tx_enh_profile,
+     "Your saved sets of the Graphics settings. Left and Right choose one; A or Enter loads it. Rows that apply after a "
+     "restart are asked about when the menu closes.", nullptr, false, true},
+    {TAB_GRAPHICS, "Save profile as", nullptr, 0, 0, 0, nullptr,   // (enhanced: a text field, field_rows)
+     "Saves the Graphics settings as they are now under the name you type: letters, digits, spaces, - or _. A name "
+     "already saved is replaced."},
     {TAB_GRAPHICS, "Resolution and upscaling", nullptr, 0, 0, 0, nullptr, nullptr, nullptr, false, true, -1, true},
     // (the shape, then its sizes: the screen's display modes, display_modes.h; outputs_sync sets both rows' ends at the start)
     {TAB_GRAPHICS, "Aspect ratio", &opts.ultrawide, 0, 1, 1, tx_ultrawide,
@@ -1968,6 +1984,7 @@ const char* ini_key(const Row& r) {
     if (r.name && !strcmp(r.name, "Low-life pulse")) return "enh_low_life_rumble";
     if (r.name && !strcmp(r.name, "Adaptive triggers")) return "enh_triggers";
     if (r.name && !strcmp(r.name, "Music volume")) return "enh_music_volume";
+    if (r.name && !strcmp(r.name, "Graphics profile")) return "enh_graphics_profile";
     if (r.name && !strcmp(r.name, "Effects volume")) return "enh_effects_volume";
     static char k[32];
     size_t n = 0;
@@ -2727,11 +2744,13 @@ struct FieldRow {
     TextField* field;
     const char* (*apply)();
 };
+#include "enh_graphics_profiles.inc"   // (enhanced) graphics profiles: the row's load, the field's save
 const FieldRow field_rows[] = {{"Custom output size", &output_field, output_field_apply}};
 /// A row that is a text field (a row with no value, by its name, as is_motion_row): its field and apply; nullptr any other
 const FieldRow* field_row(const Row& r) {
     for (const FieldRow& f : field_rows)
         if (!r.value && !strcmp(r.name, f.name)) return &f;
+    if (!r.value && !strcmp(r.name, enh_profile_field_row.name)) return &enh_profile_field_row;   // (enhanced) Save profile as
     return nullptr;
 }
 TextField* editing = nullptr;            // (the field that has the keyboard, menu_tick; nullptr none)
@@ -3532,6 +3551,8 @@ void draw_options(ui::Ctx& c) {
     const char* hint = selr.value && selr.hint ? selr.hint(*selr.value, -1) : field && editing == field->field ? edit_why : nullptr;
     if (is_share_row(selr) && !share_said.empty()) hint = share_said.c_str();   // (what the last save did)
     if (&selr == &rows[kBugReportRow]) hint = bug_report_hint();   // (the Bug report: where it was saved, or why not)
+    if (enh_profile_said && (enh_profile_row(selr) || &enh_profile_field == (field ? field->field : nullptr)))   // (enhanced)
+        hint = enh_profile_said;
     const std::string pending_line = (cur_tab == TAB_GRAPHICS || cur_tab == TAB_DEBUG) && restart_pending() ? restart_line(c, 16 * s, hx1 - hx0 - 66 * s) : "";
     static float help_tall = 0, help_tall_w = 0;
     static std::string help_said;   // (Save my pipeline list's line as measured: measured again when it changes)
@@ -5709,6 +5730,7 @@ void menu_tick() {
         else if (press[7] && is_share_row(r)) share_pipeline_list(), press[7] = false, changed = true;
         else if (press[7] && is_laptop_row(r)) weak_laptop_apply(), press[7] = false, changed = true;
         else if (press[7] && &r == &rows[kBugReportRow]) bug_report_save(), press[7] = false, changed = true;
+        else if (press[7] && enh_profile_row(r)) enh_profile_load(), press[7] = false, changed = true;   // (enhanced)
         else if (const FieldRow* f = press[7] ? field_row(r) : nullptr) edit_start(*f->field, f->apply), changed = true;   // (hookshot)
         else if (press[7] && !r.value && can_bind()) page = 1, csel = 0, ccol = menu_hit::kCtlPrimary, changed = true;
         if ((press[3] || press[4] || press[7]) && r.value) {   // (Enter, or A, as Right)

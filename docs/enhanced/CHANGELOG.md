@@ -17,3 +17,5 @@ Changes of the fork only. Upstream's are in [CHANGELOG.md](../../CHANGELOG.md).
   ([GRAPHICS_PROFILES.md](GRAPHICS_PROFILES.md)). Branch `feature/graphics-profiles`.
 - Mod manager: `scripts/enhanced/zot_mods.py` lists the mods folder in load order, reports conflicts, turns mods on
   and off, and keeps mod profiles ([MOD_MANAGER.md](MOD_MANAGER.md)). Branch `feature/mod-manager`.
+- Graphics profiles in the Insert menu (Graphics tab: Graphics profile, Save profile as), in English and French.
+  Branch `feature/graphics-profiles-menu`.

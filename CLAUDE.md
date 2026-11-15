@@ -26,6 +26,12 @@ This file adds the fork's rules and overrides upstream where they conflict.
 - Do not edit `readme.md`, `AGENTS.md` or `CONTRIBUTING.md`: the fork's landing page is `.github/README.md`.
 - New options use `enh_*` keys in `hookshot_options.ini`. Every Enhanced feature can be turned off.
 - A new menu row needs its README table row (`tests/test_readme_menu_rows.py`): plan for it.
+- **Every new menu text gets its French translation in the same change** (the owner plays in French): the `kfr` table of
+  `gpu/vk/menu_i18n.h`, sorted by English key, and its count in the `{"fr", "Français", kfr, N}` line. A text the menu
+  shows must be a string literal in `gpu/vk/vk_menu.cpp` to be translatable (`tests/test_menu_i18n.py` reads that file).
+- Tests cut functions out of `vk_menu.cpp` (`ini_key`, `is_slider`, `stops_at_ends`, `render_voice`, the text field code)
+  and compile them with their own stand-ins: match fork rows by name there, keep one-line functions on one line, and put
+  fork code outside the cut regions (an `.inc` included after `struct FieldRow`, `enh_render_voice` after `mix_depth`).
 
 ## Build and test
 
