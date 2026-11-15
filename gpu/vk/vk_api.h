@@ -70,6 +70,10 @@ enum { HOS_OPT_AUDIO_OUTPUT = 57 };
    start (gpu/vk/vk_replay.cpp async_on: RX_VK_ASYNC=1, or unset and the Insert menu's Threaded rendering On, or its Auto's
    choice). host/nvn_native.c answers the game's present poll at once with it. The existing option callback: no new member.) */
 enum { HOS_OPT_RENDER_THREAD = 58 };
+/* (enhanced) Hookshot Enhanced's PlayStation pad rows (Controls; host/enh_dualsense.c): Lightbar 0 Off, 1 Hearts;
+   Low-life pulse 0 Off, 1 On; Adaptive triggers 0 Off, 1 Light, 2 Strong. Past 60, which upstream keeps for its Item
+   wheel (tests/test_option_ids.py). The existing option callback: no new member. */
+enum { HOS_OPT_ENH_LIGHTBAR = 61, HOS_OPT_ENH_LOW_LIFE_RUMBLE, HOS_OPT_ENH_TRIGGERS };
 
 /* (hookshot) the controls' names (host/nn_hid.c, host/pad_sdl.c, the pad_ and key_ lines of hookshot_options.ini):
    the Switch's buttons in nn::hid's bit order, and a gamepad's inputs by position (the bottom face button first:

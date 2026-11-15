@@ -1,7 +1,18 @@
 # PlayStation pads: lightbar and adaptive triggers (Hookshot Enhanced)
 
-Two optional features for PlayStation controllers, off unless switched on. With both off, nothing is sent to any pad
-and the game behaves as upstream.
+Optional features for PlayStation controllers, off unless switched on, in the Insert menu's **Controls** tab
+(**Lightbar**, **Low-life pulse**, **Adaptive triggers**; saved as `enh_lightbar`, `enh_low_life_rumble` and
+`enh_triggers` in `hookshot_options.ini`). They change at once. With them off, nothing is sent to any pad and the game
+behaves as upstream.
+
+| Row | Choices | Default |
+|---|---|---|
+| Lightbar | Off, Hearts | Off |
+| Low-life pulse | Off, On (with the Lightbar on Hearts) | On |
+| Adaptive triggers | Off, Light, Strong | Off |
+
+The switches below, in `hookshot_env.txt` or the environment, win over their row for the run when they are set
+(remove the line to choose in the menu again):
 
 | Switch | Values | What it does | Pads |
 |---|---|---|---|
@@ -9,7 +20,7 @@ and the game behaves as upstream.
 | `HOOKSHOT_ENH_LOW_LIFE_RUMBLE` | on by default with the lightbar; `0` or `off` | At one heart or less, a short pulse (90 ms) on the motors at each red blink, like a heartbeat. Scaled by the menu's Rumble strength (Off: none); skipped while the game's own rumble plays | DualSense, DualShock 4 |
 | `HOOKSHOT_ENH_TRIGGERS` | `1` (light), `2` (strong), `off` | A constant resistance on L2 and R2 for the whole pull | DualSense |
 
-Put them in `hookshot_env.txt` beside `hookshot.exe` (one `NAME=value` per line), then start the game:
+For example, in `hookshot_env.txt` beside `hookshot.exe`:
 
 ```
 HOOKSHOT_ENH_LIGHTBAR=hearts
@@ -28,6 +39,9 @@ and, once per pad, if SDL refused a colour or an effect.
 - `host/enh_dualsense.h` (new): the pure part, compiled by `tests/test_enh_dualsense.py`: pad kinds from
   `SDL_GetGamepadType`, the switches, the hearts colour, the DualSense effect block.
 - Upstream files, small edits marked `(enhanced)`:
+  - `gpu/vk/vk_api.h`: `HOS_OPT_ENH_LIGHTBAR` (61), `HOS_OPT_ENH_LOW_LIFE_RUMBLE`, `HOS_OPT_ENH_TRIGGERS`, past
+    upstream's reserved 60. `gpu/vk/vk_replay.cpp` answers them; `gpu/vk/vk_menu.h`/`.cpp` have the rows and their
+    `enh_` keys. `readme.md`: their lines in the option table.
   - `host/hos_sdl.c` / `.h`: `SDL_SetGamepadLED` (`SDL_GameControllerSetLED` on SDL2) loaded, optional, and
     `hos_sdl_pad_led`.
   - `host/pad_sdl.c`: `hos_enh_pad` called for each pad at each poll (with whether the game's rumble plays and the
@@ -45,4 +59,6 @@ and, once per pad, if SDL refused a colour or an effect.
   directly.
 - To check by hand: USB and Bluetooth; losing and gaining hearts; the title, a pause and a load (blue after 2 s);
   rumble still working with the triggers on; unplugging and plugging the pad back in.
-- A menu row for each switch is the next step (it needs a row in `readme.md`'s table: `tests/test_readme_menu_rows.py`).
+- The menu rows are not translated yet: they show in English in every menu language.
+- The rows needed a line each in upstream's `readme.md` option table (`tests/test_readme_menu_rows.py`), the one
+  edit of `readme.md` the fork makes.

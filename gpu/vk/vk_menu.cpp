@@ -837,6 +837,10 @@ const char* tx_menu_size(int v) {
     return v >= 1 && v <= 3 ? t[v - 1] : t[1];
 }
 const char* tx_auto_run(int v) { return v ? "On" : "Off"; }
+// (enhanced) the PlayStation pad rows (host/enh_dualsense.c)
+const char* tx_enh_lightbar(int v) { return v ? "Hearts" : "Off"; }
+const char* tx_enh_low_life_rumble(int v) { return v ? "On" : "Off"; }
+const char* tx_enh_triggers(int v) { return v == 2 ? "Strong" : v == 1 ? "Light" : "Off"; }
 
 const char* tx_stick_dead_zone(int v) {
     static const char* t[] = {"Default (24%)", "5%", "10%", "15%", "20%", "30%"};
@@ -1452,6 +1456,15 @@ Row rows[] = {
      "stick or the movement keys, or tap A again, to stop.", nullptr, false, true},
     {TAB_CONTROLS, "Rumble strength", &opts.rumble, 0, 150, 25, tx_rumble,
      "How strongly the controller rumbles, in percent of the game's rumble. Off turns it off.", nullptr, false, true},
+    // (enhanced) PlayStation pads (host/enh_dualsense.c). HOOKSHOT_ENH_* in hookshot_env.txt, when set, wins over them
+    {TAB_CONTROLS, "Lightbar", &opts.enh_lightbar, 0, 1, 1, tx_enh_lightbar,
+     "A DualSense's or DualShock 4's lightbar shows Link's life: green when full, yellow at half, red near empty, "
+     "blinking at one heart or less. Off leaves it as SDL sets it.", nullptr, false, true},
+    {TAB_CONTROLS, "Low-life pulse", &opts.enh_low_life_rumble, 0, 1, 1, tx_enh_low_life_rumble,
+     "With the Lightbar on Hearts: a short pulse, like a heartbeat, at each red blink. Rumble strength scales it; it "
+     "waits while the game's own rumble plays.", nullptr, false, true},
+    {TAB_CONTROLS, "Adaptive triggers", &opts.enh_triggers, 0, 2, 1, tx_enh_triggers,
+     "A DualSense's L2 and R2 push back over the whole pull, lightly or strongly. Off frees them.", nullptr, false, true},
     {TAB_MOTION, "Motion controls", &opts.gyro, 0, 1, 1, tx_gyro,
      "Aims and looks with the controller's gyroscope where the game uses motion, as on the Switch. Works with Switch Pro "
      "controllers and pads in Switch mode, DualSense and DualShock 4. Shown beside it: whether the connected pad has one.", hn_gyro,
@@ -1942,6 +1955,11 @@ const char* ini_key(const Row& r) {
     if (r.value == &opts.dlss) return "dlss";   // (as opts.dlss and RX_VK_DLSS)
     if (r.value == &opts.handheld) return "handheld_profile";   // (the Profile row; host/nn_applet.c reads it at the start)
     if (r.value == &opts.ultrawide) return "ultrawide";   // (the Aspect ratio row; host/hos_main.c reads it at the start)
+    // (enhanced) the fork's rows keep enh_ keys, apart from upstream's (by name: tests cut this function out with
+    // their own Options, which has no enh_ fields)
+    if (r.name && !strcmp(r.name, "Lightbar")) return "enh_lightbar";
+    if (r.name && !strcmp(r.name, "Low-life pulse")) return "enh_low_life_rumble";
+    if (r.name && !strcmp(r.name, "Adaptive triggers")) return "enh_triggers";
     static char k[32];
     size_t n = 0;
     for (const char* p = r.name; *p && n + 1 < sizeof k; p++) k[n++] = *p == ' ' ? '_' : (char)tolower(*p);
