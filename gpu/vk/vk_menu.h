@@ -68,6 +68,9 @@ struct Options {
     int enh_lightbar = 0;
     int enh_low_life_rumble = 1;
     int enh_triggers = 0;
+    // (enhanced) the music's and the effects' share of the sound, percent, 0 to 150 (host/enh_audio.c; HOS_OPT_ENH_*)
+    int enh_music_volume = 100;
+    int enh_effects_volume = 100;
     int mouse_sens = 100; // the mouse's sensitivity in percent: 0.1 degrees a count at 100 with native look (host/nn_hid.c)
     int mouse_invert = 0; // the mouse's up and down swapped
     int walk_mode = 0;    // (hookshot) the Walk key (the Controls page): 0 Link walks while it is held, 1 one press walks and the next

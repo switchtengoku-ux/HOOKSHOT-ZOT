@@ -1388,6 +1388,13 @@ Row rows[] = {
     // Audio
     {TAB_AUDIO, "Volume", &opts.volume, 0, 100, 5, tx_percent,
      "How loud the game plays. The game's own sound settings and Windows' volume still apply.", nullptr, false, true},
+    // (enhanced) the music's and the effects' share (host/enh_audio.c). HOOKSHOT_ENH_*_VOLUME in hookshot_env.txt wins
+    {TAB_AUDIO, "Music volume", &opts.enh_music_volume, 0, 150, 5, tx_percent,
+     "How loud the music plays against the rest, before Volume. Above 100% it is louder than the game mixes it.", nullptr,
+     false, true},
+    {TAB_AUDIO, "Effects volume", &opts.enh_effects_volume, 0, 150, 5, tx_percent,
+     "How loud everything but the music plays: sounds, voices, the menus' clicks. Volume still applies on top.", nullptr,
+     false, true},
     {TAB_AUDIO, "Mute in background", &opts.mute_background, 0, 1, 1, tx_onoff,
      "Silences the game while another window has the focus. The sound comes back when you switch to the game.", nullptr,
      false, true},
@@ -1892,9 +1899,9 @@ constexpr int64_t kMarqueeStep = 150000000LL, kMarqueeRest = 1200000000LL;   // 
 int hover_tab = -1;
 int drag_row = -1;
 bool mouse_read = false;   // (the menu has read the mouse since it opened)
-bool is_slider(const Row& r) { return r.value == &opts.sharpness || r.value == &opts.mouse_sens || r.value == &opts.gyro_sens_x || r.value == &opts.gyro_sens_y || r.value == &opts.volume || r.value == &opts.camera_speed || r.value == &opts.fov; }
+bool is_slider(const Row& r) { return r.value == &opts.sharpness || r.value == &opts.mouse_sens || r.value == &opts.gyro_sens_x || r.value == &opts.gyro_sens_y || r.value == &opts.volume || r.value == &opts.camera_speed || r.value == &opts.fov || (r.name && (!strcmp(r.name, "Music volume") || !strcmp(r.name, "Effects volume"))) /* (enhanced) host/enh_audio.c */; }
 /// (a scale: the arrows and a click stop at its ends; Rumble strength would go from Off to its strongest)
-bool stops_at_ends(const Row& r) { return r.value == &opts.ultrawide || r.value == &opts.mouse_sens || r.value == &opts.rumble || r.value == &opts.gyro_sens_x || r.value == &opts.gyro_sens_y || r.value == &opts.volume || r.value == &opts.camera_speed || r.value == &opts.fov; }
+bool stops_at_ends(const Row& r) { return r.value == &opts.ultrawide || r.value == &opts.mouse_sens || r.value == &opts.rumble || r.value == &opts.gyro_sens_x || r.value == &opts.gyro_sens_y || r.value == &opts.volume || r.value == &opts.camera_speed || r.value == &opts.fov || (r.name && (!strcmp(r.name, "Music volume") || !strcmp(r.name, "Effects volume"))) /* (enhanced) host/enh_audio.c */; }
 /// (the ini's Rumble strength on the menu's steps: 0 to 150, the nearest 25)
 int rumble_step(int v) { return (std::min(std::max(v, 0), 150) + 12) / 25 * 25; }
 // (hookshot) A run's environment over a saved row (RX_VK_PACE=1, HOS_OUTPUT_RES=...): for that run only. save() writes the
@@ -1960,6 +1967,8 @@ const char* ini_key(const Row& r) {
     if (r.name && !strcmp(r.name, "Lightbar")) return "enh_lightbar";
     if (r.name && !strcmp(r.name, "Low-life pulse")) return "enh_low_life_rumble";
     if (r.name && !strcmp(r.name, "Adaptive triggers")) return "enh_triggers";
+    if (r.name && !strcmp(r.name, "Music volume")) return "enh_music_volume";
+    if (r.name && !strcmp(r.name, "Effects volume")) return "enh_effects_volume";
     static char k[32];
     size_t n = 0;
     for (const char* p = r.name; *p && n + 1 < sizeof k; p++) k[n++] = *p == ' ' ? '_' : (char)tolower(*p);

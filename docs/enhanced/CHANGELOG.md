@@ -11,3 +11,5 @@ Changes of the fork only. Upstream's are in [CHANGELOG.md](../../CHANGELOG.md).
   reuse). Branch `feature/foundations`.
 - PlayStation pads: lightbar showing Link's life and DualSense adaptive triggers, switched on in `hookshot_env.txt`
   (`HOOKSHOT_ENH_LIGHTBAR`, `HOOKSHOT_ENH_TRIGGERS`) ([DUALSENSE.md](DUALSENSE.md)). Branch `feature/dualsense`.
+- PlayStation pads in the Insert menu (Controls: Lightbar, Low-life pulse, Adaptive triggers). Branch `feature/dualsense-menu`.
+- Music volume and Effects volume rows on the Audio tab ([AUDIO_MIX.md](AUDIO_MIX.md)). Branch `feature/audio-mix`.

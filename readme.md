@@ -356,6 +356,8 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | Threaded rendering | Auto, On, Off (after a restart). Auto is On with 12 or more processor threads for the game | Auto |
 | | VRAM budget | Auto, 3.6, 4.8, 6, 7.5, 9, 11 GB (2.2 GB only from the Minimum (4GB) preset); a quality preset sets it | Auto |
 | Audio | Volume | 0 to 100%, in steps of 5 | 100% |
+| | Music volume | 0 to 150%, in steps of 5 (Hookshot Enhanced: the music against the rest) | 100% |
+| | Effects volume | 0 to 150%, in steps of 5 (Hookshot Enhanced: everything but the music) | 100% |
 | | Mute in background | Off, On | Off |
 | | Audio output | Auto, Stereo, 5.1 (after a restart) | Auto |
 | Gameplay | FPS counter | Off, FPS, Frame time, Graph, Breakdown | Off |
