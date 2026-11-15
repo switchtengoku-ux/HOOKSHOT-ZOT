@@ -13,8 +13,8 @@ implement, test against [TEST_BASELINE.md](TEST_BASELINE.md), document, commit.
 | 6 | DualSense: lightbar (hearts colour), low-life pulse, adaptive triggers, on/off | Done: menu rows on Controls ([DUALSENSE.md](DUALSENSE.md)) |
 | 6b | Music volume and Effects volume (not in the original brief) | Done | [AUDIO_MIX.md](AUDIO_MIX.md) |
 | 7 | Performance recording: from the menu or a key, P95/P99, session report | Postponed (performance is fine for now) | Ideas from XC3's `perfmon.c`; code in `gpu/vk/vk_fps.cpp` |
-| 8 | Mod manager tool over the existing loader: list, enable/disable, conflicts, profiles | Planned | No second loader: `host/mods.c`'s rules |
-| 9 | Named graphics profiles | In review (`feature/graphics-profiles`, a tool; menu row later) | A tool over `hookshot_options.ini` first |
+| 8 | Mod manager tool over the existing loader: list, enable/disable, conflicts, profiles | Done: a tool ([MOD_MANAGER.md](MOD_MANAGER.md)); a Mods tab later | No second loader: `host/mods.c`'s rules |
+| 9 | Named graphics profiles | Done: a tool ([GRAPHICS_PROFILES.md](GRAPHICS_PROFILES.md)); a menu row later | A tool over `hookshot_options.ini` first |
 | 10 | HUD editor | Research | `host/hos_wide_ui.c` sees every HUD pane's transform; opacity is unknown |
 | 11 | Photo mode | Research | Free camera exists in the debug tools; HUD hide to find |
 | 12 | Stabilization and a first release | Later | Needs the launcher/updater decision ([UPSTREAM_SYNC.md](UPSTREAM_SYNC.md)) |
