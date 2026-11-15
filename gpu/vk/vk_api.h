@@ -79,6 +79,10 @@ enum { HOS_OPT_ENH_MUSIC_VOLUME = 64, HOS_OPT_ENH_EFFECTS_VOLUME };
 /* (enhanced) the photo mode (gpu/vk/enh_photo.cpp): 1 while on; the host hides the HUD, holds the world and moves the free
    camera from it (host/enh_photo.c) */
 enum { HOS_OPT_ENH_PHOTO = 66 };
+/* (enhanced) the HUD editor (gpu/vk/enh_hud.cpp, host/enh_hud.c): HOS_OPT_ENH_HUD + element * 5 + field (visible 0/1,
+   size percent, X and Y canvas units, opacity percent), for HOS_ENH_HUD_ELEMENTS elements: 70 to 99 */
+#define HOS_ENH_HUD_ELEMENTS 6
+enum { HOS_OPT_ENH_HUD = 70 };
 
 /* (hookshot) the controls' names (host/nn_hid.c, host/pad_sdl.c, the pad_ and key_ lines of hookshot_options.ini):
    the Switch's buttons in nn::hid's bit order, and a gamepad's inputs by position (the bottom face button first:

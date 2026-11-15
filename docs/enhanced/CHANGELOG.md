@@ -22,3 +22,6 @@ Changes of the fork only. Upstream's are in [CHANGELOG.md](../../CHANGELOG.md).
 - Photo mode: F8 or Gameplay → Photo mode hides the HUD, holds the world still and gives the controls to the free
   camera; F9 or Take a photo saves a PNG at the picture's own size in the Pictures folder ([PHOTO_MODE.md](PHOTO_MODE.md)).
   F6 and F7 hide the HUD or hold the world alone. English and French. Branch `feature/photo-hud-proto`.
+- HUD editor: Gameplay → HUD element and its rows show or hide, resize, move and fade hearts, magic, item buttons,
+  top-right buttons, minimap and place name; Reset HUD puts them back ([HUD_EDITOR.md](HUD_EDITOR.md)). English and
+  French. Branch `feature/hud-editor`.

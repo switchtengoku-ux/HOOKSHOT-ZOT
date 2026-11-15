@@ -73,6 +73,10 @@ struct Options {
     int enh_effects_volume = 100;
     // (enhanced) the Graphics profile row's choice: an index into the saved profiles (enh_graphics_profiles.inc)
     int enh_gfx_profile = 0;
+    // (enhanced) the HUD editor's rows (gpu/vk/enh_menu_hud.inc): the element chosen, and its settings as shown (each
+    // element's own are gpu/vk/enh_hud.cpp's, in enh_hud.ini)
+    int enh_hud_sel = 0;
+    int enh_hud_visible = 1, enh_hud_size = 100, enh_hud_x = 0, enh_hud_y = 0, enh_hud_alpha = 100;
     int mouse_sens = 100; // the mouse's sensitivity in percent: 0.1 degrees a count at 100 with native look (host/nn_hid.c)
     int mouse_invert = 0; // the mouse's up and down swapped
     int walk_mode = 0;    // (hookshot) the Walk key (the Controls page): 0 Link walks while it is held, 1 one press walks and the next

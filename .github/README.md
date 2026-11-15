@@ -18,11 +18,13 @@ tools and options on top of upstream, while staying close to it so its releases 
 | Feature | State | Docs |
 |---|---|---|
 | Save manager: SHA-256-verified snapshots, safe restore, zip export/import | Done (branch `feature/save-manager`) | [SAVE_MANAGER.md](../docs/enhanced/SAVE_MANAGER.md) |
-| DualSense lightbar and adaptive triggers, profiles | Planned | [ROADMAP.md](../docs/enhanced/ROADMAP.md) |
-| Performance recording (CSV, percentiles, session report) | Planned | |
-| Mod manager over the existing RomFS loader | Planned | |
-| Saved graphics profiles | Planned | |
-| HUD editor, photo mode | Research | |
+| DualSense lightbar, low-life pulse and adaptive triggers | Done | [DUALSENSE.md](../docs/enhanced/DUALSENSE.md) |
+| Music and effects volume | Done | [AUDIO_MIX.md](../docs/enhanced/AUDIO_MIX.md) |
+| Saved graphics profiles, in the menu and as a tool | Done | [GRAPHICS_PROFILES.md](../docs/enhanced/GRAPHICS_PROFILES.md) |
+| Mod manager tool over the existing RomFS loader | Done (a tool; no menu page yet) | [MOD_MANAGER.md](../docs/enhanced/MOD_MANAGER.md) |
+| Photo mode | Done | [PHOTO_MODE.md](../docs/enhanced/PHOTO_MODE.md) |
+| HUD editor | Done | [HUD_EDITOR.md](../docs/enhanced/HUD_EDITOR.md) |
+| Performance recording (CSV, percentiles, session report) | Postponed | [ROADMAP.md](../docs/enhanced/ROADMAP.md) |
 
 What upstream already has, and what the fork adds, is in [FEATURE_MATRIX.md](../docs/enhanced/FEATURE_MATRIX.md).
 
