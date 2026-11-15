@@ -9,3 +9,5 @@ Changes of the fork only. Upstream's are in [CHANGELOG.md](../../CHANGELOG.md).
 - Foundations: `CLAUDE.md`, the fork's landing page `.github/README.md`, `scripts/enhanced/build_windows.ps1`, and the
   fork's docs in `docs/enhanced/` (build, test baseline, upstream sync, feature matrix, roadmap, architecture, XC3
   reuse). Branch `feature/foundations`.
+- PlayStation pads: lightbar showing Link's life and DualSense adaptive triggers, switched on in `hookshot_env.txt`
+  (`HOOKSHOT_ENH_LIGHTBAR`, `HOOKSHOT_ENH_TRIGGERS`) ([DUALSENSE.md](DUALSENSE.md)). Branch `feature/dualsense`.

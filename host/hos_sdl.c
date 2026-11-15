@@ -23,6 +23,7 @@ static struct {
     /* controllers */
     void *PadOpen, *PadClose, *PadConnected, *PadsUpdate, *PadButton, *PadAxis, *PadName, *PadRumble;
     void *PadType, *PadEffect;   /* (optional: HD rumble, host/pad_sdl.c) */
+    void *PadLED;   /* (enhanced) optional: the lightbar, host/enh_dualsense.c */
     void *PadHasSensor, *PadSensorEnable, *PadSensorData;   /* (motion: optional, NULL in an SDL without them) */
     void *PadVendor, *PadSteamHandle, *SetHintPriority;   /* (Steam's stand-in pads: optional, host/steam_pads.h) */
     void *JoystickGUID, *PadMapping;   /* (optional connection diagnostics: no serial number or device path) */
@@ -71,6 +72,8 @@ static int get_all(HMODULE m, int three) {
     /* (SDL2 2.0.12 and 2.0.16 on, SDL3 3.2 on: without them every pad keeps the motor rumble) */
     *(FARPROC *)&f.PadType = GetProcAddress(m, three ? "SDL_GetGamepadType" : "SDL_GameControllerGetType");
     *(FARPROC *)&f.PadEffect = GetProcAddress(m, three ? "SDL_SendGamepadEffect" : "SDL_GameControllerSendEffect");
+    /* (enhanced) the lightbar: SDL2 2.0.14 on and every SDL3; without it host/enh_dualsense.c sets no colour */
+    *(FARPROC *)&f.PadLED = GetProcAddress(m, three ? "SDL_SetGamepadLED" : "SDL_GameControllerSetLED");
     /* (motion sensors: SDL 2.0.14 on and every SDL3; without them the pads still play, with no gyro) */
     *(FARPROC *)&f.PadHasSensor = GetProcAddress(m, three ? "SDL_GamepadHasSensor" : "SDL_GameControllerHasSensor");
     *(FARPROC *)&f.PadSensorEnable = GetProcAddress(m, three ? "SDL_SetGamepadSensorEnabled" : "SDL_GameControllerSetSensorEnabled");
@@ -724,6 +727,12 @@ int hos_sdl_pad_effect(void *pad, const void *data, int size) {
     if (!f.PadEffect) return 0;
     if (version == 3) return CALL(_Bool (*)(void *, const void *, int), PadEffect)(pad, data, size);
     return CALL(int (*)(void *, const void *, int), PadEffect)(pad, data, size) == 0;
+}
+/* (enhanced) the pad's lightbar colour (host/enh_dualsense.c): 1 when SDL took it */
+int hos_sdl_pad_led(void *pad, uint8_t red, uint8_t green, uint8_t blue) {
+    if (!f.PadLED) return 0;
+    if (version == 3) return CALL(_Bool (*)(void *, uint8_t, uint8_t, uint8_t), PadLED)(pad, red, green, blue);
+    return CALL(int (*)(void *, uint8_t, uint8_t, uint8_t), PadLED)(pad, red, green, blue) == 0;
 }
 /* (motion) type: HOS_SDL_SENSOR_ACCEL or _GYRO, the same numbers in both */
 int hos_sdl_pad_has_sensor(void *pad, int type) {

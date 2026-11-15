@@ -334,6 +334,8 @@ static void pads_poll(void) {
             for (int i = 0; i < MAX_PADS; i++)
                 if (pads[i].gc && !hos_sdl_pad_connected(pads[i].gc)) {
                     hos_log("hid: controller \"%s\" disconnected (SDL)", hos_sdl_pad_name(pads[i].gc));
+                    void hos_enh_pad_gone(int slot);   /* (enhanced) host/enh_dualsense.c */
+                    hos_enh_pad_gone(i);
                     hos_sdl_pad_close(pads[i].gc);
                     pads[i].gc = NULL;
                     pads[i].rumble_lo = pads[i].rumble_hi = 0;
@@ -417,6 +419,10 @@ static void pads_poll(void) {
             if (motion_only) {
                 motion_only_used(i, now);
                 continue;
+            }
+            {   /* (enhanced) the lightbar and adaptive triggers, host/enh_dualsense.c: nothing unless switched on */
+                void hos_enh_pad(int slot, void *gc, uint32_t serial, int64_t now, int game_rumbling, int strength);
+                hos_enh_pad(i, gc, pads[i].serial, now, lo || hi, strength);
             }
             count++;
             uint64_t sig = 0;

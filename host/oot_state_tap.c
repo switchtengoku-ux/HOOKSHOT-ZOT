@@ -433,6 +433,17 @@ int hos_oot_poll(int slot, char *out, size_t cap) {
 }
 
 /* Each update of Link (actor: the one whose +0x31c is his position). Only this function reads guest memory. */
+/* (enhanced) Link's life and his hearts' total, in quarter hearts (host/enh_dualsense.c's lightbar): 1 when both were
+   read. Called where hos_oot_state_tap is, during Link's update. */
+int hos_oot_life(int *life, int *max_life) {
+    const uint64_t mgr = state_u64(state_u64(STATE_GAMEDATA_SLOT));
+    int64_t l, m;
+    if (!mgr || !state_number(mgr, KIND_INT, STATE_LIFE, &l) || !state_number(mgr, KIND_INT, STATE_MAX_LIFE, &m)) return 0;
+    *life = (int)l;
+    *max_life = (int)m;
+    return 1;
+}
+
 void hos_oot_state_tap(uint64_t actor) {
     if (!hos_control_on) return;
     const int64_t due = __atomic_load_n(&state_due, __ATOMIC_ACQUIRE);
