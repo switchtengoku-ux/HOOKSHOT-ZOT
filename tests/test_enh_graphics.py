@@ -46,7 +46,8 @@ def menu_graphics_keys():
     by_field = dict(re.findall(r'r\.value == &opts\.(\w+)\) return "([^"]+)"', body))
     keys = []
     for name, field in re.findall(r'\{TAB_GRAPHICS, "([^"]+)", &opts\.(\w+)', menu):
-        keys.append(by_field.get(field) or name.lower().replace(" ", "_"))
+        if field != "enh_gfx_profile":   # (the Graphics profile row itself: not a setting a profile holds)
+            keys.append(by_field.get(field) or name.lower().replace(" ", "_"))
     return keys
 
 
@@ -77,7 +78,7 @@ class GraphicsProfileTests(unittest.TestCase):
 
     def test_labels_are_the_menus(self):
         menu = (ROOT / "gpu" / "vk" / "vk_menu.cpp").read_text(encoding="utf-8")
-        names = [n for n, _ in re.findall(r'\{TAB_GRAPHICS, "([^"]+)", &opts\.(\w+)', menu)]
+        names = [n for n, f in re.findall(r'\{TAB_GRAPHICS, "([^"]+)", &opts\.(\w+)', menu) if f != "enh_gfx_profile"]
         self.assertEqual(list(zg.ROWS), list(zg.GRAPHICS_KEYS))
         self.assertEqual([zg.row_name(k) for k in zg.GRAPHICS_KEYS], names)
 

@@ -39,7 +39,21 @@ HDR rows, Texture detail, Anisotropic filtering, GPU device, Threaded rendering 
 Rows marked "after a restart" in the menu take effect at the next start, as when they are changed there. A row the
 PC cannot use (Reflex without an NVIDIA card) is saved and put back as it is; the game ignores it there as usual.
 
-## Not yet
+## In the game's menu
 
-A row in the Insert menu to switch profiles while playing. The tool comes first; the row needs the menu to read and
-write profile files, which is a larger change to `gpu/vk/vk_menu.cpp`.
+The Insert menu's **Graphics** tab has the same profiles, under Quality preset:
+
+| Row | What it does |
+|---|---|
+| **Graphics profile** | Left and Right choose among the saved profiles; **A or Enter loads** the one shown. The settings change at once; the rows that apply after a restart are asked about when the menu closes, as when they are changed by hand |
+| **Save profile as** | A text field: type a name (letters, digits, spaces, `-`, `_`) and press Enter to save the Graphics settings as they are now. A name already saved is replaced |
+
+The menu and the tool use the same files, so a profile saved in one shows in the other. Deleting a profile is the tool's
+`delete` for now. The rows and their messages are in French too (`gpu/vk/menu_i18n.h`).
+
+How it is built: `gpu/vk/enh_graphics_profiles.inc` (included by `gpu/vk/vk_menu.cpp` after `struct FieldRow`) loads a
+profile through the menu's own rows, `ini_key` and `parse_output`, as `menu_init` reads the options file, then saves;
+it saves one by letting `save()` write the options file and keeping its Graphics lines. `vk_menu.cpp` has the two rows
+(after Quality preset, outside the sections `tests/test_menu_sections.py` fixes), their texts (`enh_profile_texts`, so
+`menu_i18n.h` can translate them), the load on A or Enter, and the field in `field_row` (upstream's `field_rows` table
+keeps its one entry, which `tests/test_menu_text_field.py` checks).
