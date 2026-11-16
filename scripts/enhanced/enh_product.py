@@ -23,6 +23,15 @@ STORE_ENV_PREFIX = "HOOKSHOT_ZOT_"         # <this><NAME> moves one store
 SNAPSHOT_FORMAT = "hookshot-zot-snapshot"  # the snapshots this product writes
 # The snapshots it reads: its own and those of the other Enhanced forks of the same game, whose save files are the same
 SNAPSHOT_FORMATS = re.compile(r"[a-z]+-zot-snapshot$")
+# The Insert menu's Graphics rows as the options file keys them, in the menu's order (each product's menu has its own:
+# scripts/enhanced/zot_graphics.py, checked against gpu/vk/vk_menu.cpp by tests/test_enh_graphics.py)
+GRAPHICS_KEYS = (
+    "quality_preset", "ultrawide", "output_res", "handheld_profile", "dlss", "dlss_model", "resolution", "sharpness",
+    "frame_generation", "frame_generation_by", "frame_pacing", "frame_rate_cap", "nvidia_reflex", "amd_anti-lag_2",
+    "fullscreen", "vsync", "upscaling", "ultrawide_menus", "hdr", "hdr_paper_white", "hdr_peak_brightness",
+    "hdr_contrast", "hdr_tone_mapper", "texture_detail", "anisotropic_filtering", "gpu_device", "threaded_rendering",
+    "vram_budget",
+)
 
 SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

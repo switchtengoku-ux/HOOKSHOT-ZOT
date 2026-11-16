@@ -1,7 +1,7 @@
 """scripts/enhanced/port_to.py, game-free: the Enhanced layer carried from a made-up source repository to a made-up
 target fork that shares its history (as Longshot shares Hookshot's), in temp folders only.
 
-- the product profiles: both load, and hookshot.json gives back this repository's own product files unchanged;
+- the product profiles: both load, and this repository's own profile gives back its product files unchanged;
 - a dry run changes nothing in the target; --apply copies the layer, makes the product files from the profile, applies
   the hooks with the target's own edits kept, skips a hooked file the target lacks, never ports CLAUDE.md or docs, and
   writes the manifest;
@@ -15,6 +15,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -93,10 +94,11 @@ class Port(unittest.TestCase):
     def test_profiles(self):
         for name in ("hookshot", "longshot"):
             port.load_profile(name)
-        p = port.load_profile("hookshot")
+        own = re.search(r'^PRODUCT = "([^"]+)"', (ROOT / port.PRODUCT_PY).read_text(encoding="utf-8"), re.M).group(1)
+        p = port.load_profile(own.lower())   # (this repository's own product: hookshot here, longshot once ported)
         for rel, make in ((port.PRODUCT_C, port.product_c), (port.PRODUCT_PY, port.product_py)):
             text = (ROOT / rel).read_text(encoding="utf-8")
-            self.assertEqual(make(text, p), text, "hookshot.json does not match %s" % rel)
+            self.assertEqual(make(text, p), text, "%s.json does not match %s" % (own.lower(), rel))
         bad = dict(p, env_prefix="OTHER_ENH_")
         path = self.tmp / "bad.json"
         path.write_text(json.dumps(bad), encoding="utf-8")

@@ -40,18 +40,13 @@ OPTIONS = product.OPTIONS
 SUFFIX = ".ini"
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_ -]{0,39}$")
 HEADER = "# %s graphics profile: the Graphics tab of %s (scripts/enhanced/zot_graphics.py)" % (product.ENHANCED, OPTIONS)
-# The Graphics tab's rows as the options file keys them, in the menu's order (gpu/vk/vk_menu.cpp rows and ini_key;
-# tests/test_enh_graphics.py checks this list against them)
-GRAPHICS_KEYS = (
-    "quality_preset", "ultrawide", "output_res", "handheld_profile", "dlss", "dlss_model", "resolution", "sharpness",
-    "frame_generation", "frame_generation_by", "frame_pacing", "frame_rate_cap", "nvidia_reflex", "amd_anti-lag_2",
-    "fullscreen", "vsync", "upscaling", "ultrawide_menus", "hdr", "hdr_paper_white", "hdr_peak_brightness",
-    "hdr_contrast", "hdr_tone_mapper", "texture_detail", "anisotropic_filtering", "gpu_device", "threaded_rendering",
-    "vram_budget",
-)
+# The Graphics tab's rows as the options file keys them, in the menu's order: the product's own (enh_product.py;
+# tests/test_enh_graphics.py checks them against gpu/vk/vk_menu.cpp's rows and ini_key)
+GRAPHICS_KEYS = product.GRAPHICS_KEYS
 VALUE = re.compile(r"[A-Za-z0-9x._ -]{0,64}$")
 # Each key's row name and its choices as the menu shows them (gpu/vk/vk_menu.cpp: the rows' names and their tx_
-# functions' tables; tests/test_enh_graphics.py checks the tables against the source). A key not here, or a number past
+# functions' tables; tests/test_enh_graphics.py checks the tables against the source), for the rows of every product the
+# layer is ported to: a product uses those of its GRAPHICS_KEYS. A key not here, or a number past
 # its list, is shown as it is in the file; units are added for the rows that are numbers.
 ROWS = {
     "quality_preset": ("Quality preset", ["Custom", "Minimum (4GB)", "Low (6GB)", "Balanced (8GB)", "High (12GB)",
