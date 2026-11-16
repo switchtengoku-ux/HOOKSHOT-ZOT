@@ -60,12 +60,12 @@ std::string enh_photo_folder() {
         if (WideCharToMultiByte(CP_UTF8, 0, w, -1, b, sizeof b, nullptr, nullptr) > 0) dir = b;
     }
     if (w && free_mem) free_mem(w);
-    if (!dir.empty()) return dir + "\\Hookshot";
+    if (!dir.empty()) return dir + "\\" ENH_PRODUCT;
     const char* home = getenv("USERPROFILE");
-    return home && *home ? std::string(home) + "\\Pictures\\Hookshot" : std::string("photos");
+    return home && *home ? std::string(home) + "\\Pictures\\" ENH_PRODUCT : std::string("photos");
 #else
     const char* home = getenv("HOME");
-    return home && *home ? std::string(home) + "/Pictures/Hookshot" : std::string("photos");
+    return home && *home ? std::string(home) + "/Pictures/" ENH_PRODUCT : std::string("photos");
 #endif
 }
 

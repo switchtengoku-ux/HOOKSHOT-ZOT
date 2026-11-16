@@ -27,6 +27,7 @@
 #include <stdio.h>
 #include "hos.h"
 #include "../gpu/vk/vk_api.h"   /* (HOS_OPT_ENH_PHOTO) */
+#include "enh_product.h"   /* (enh_env: the switches' names) */
 #include <stdlib.h>
 #include <string.h>
 #ifdef _WIN32
@@ -47,16 +48,16 @@ int rx_option(int id, int otherwise);   /* host/rx_backend.c */
 /* the free camera's view and sticks while the photo mode is on (weak in host/hos_main.c and host/nn_hid.c) */
 int hos_enh_photo_camera(void) { return photo_on; }
 
-static int env_set(const char *name) {
-    const char *v = getenv(name);
+static int env_set(const char *name) {   /* (an Enhanced switch: enh_env) */
+    const char *v = enh_env(name);
     return v && *v && atoi(v) != 0;
 }
 
 static void switches(void) {
     if (read_switches) return;
     read_switches = 1;
-    hud_hidden = env_set("HOOKSHOT_ENH_HUD_HIDE");
-    frozen = env_set("HOOKSHOT_ENH_FREEZE");
+    hud_hidden = env_set("HUD_HIDE");
+    frozen = env_set("FREEZE");
     if (hud_hidden || frozen)
         hos_log("enhanced: photo: HUD %s, world %s (F6 and F7 switch them)", hud_hidden ? "hidden" : "shown",
                 frozen ? "held still" : "moving");
@@ -99,7 +100,7 @@ void hos_enh_photo_tick(void) {
     static const char *file;
     static int looked;
     static int64_t next;
-    if (!looked) looked = 1, file = getenv("HOOKSHOT_ENH_PHOTO_FILE");
+    if (!looked) looked = 1, file = enh_env("PHOTO_FILE");
     if (file && *file && hos_now_ns() >= next) {
         next = hos_now_ns() + 500000000LL;
         FILE *f = fopen(file, "r");

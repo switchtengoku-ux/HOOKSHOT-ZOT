@@ -26,3 +26,27 @@ Settings: `hookshot_options.ini` (the menu's rows, written whole by `vk_menu.cpp
 - **Options**: `enh_*` keys in `hookshot_options.ini`; switches `HOOKSHOT_ENH_*` in `hookshot_env.txt`.
 - **Off switch**: every runtime feature has one, and with it off the game behaves as upstream.
 - **Docs**: `docs/enhanced/`. The fork's landing page is `.github/README.md`, so upstream's `readme.md` stays as it is.
+
+## The product layer
+
+The Enhanced files never name the product themselves: they take its names from `host/enh_product.h` (C and C++) and
+its Python twin `scripts/enhanced/enh_product.py`. Carrying the Enhanced layer to another fork of the same game (a
+Longshot Enhanced: option 3 of the architecture study) then means changing those two files, not every feature.
+
+| Name | Hookshot | Used for |
+|---|---|---|
+| `ENH_PRODUCT` / `PRODUCT` | `Hookshot` | The photos' folder (`Pictures\Hookshot`) and file names |
+| `ENH_ENHANCED` / `ENHANCED` | `Hookshot Enhanced` | The first line of the files the layer writes (profiles, `enh_hud.ini`) |
+| `ENH_OPTIONS` / `OPTIONS` | `hookshot_options.ini` | The Insert menu's options file |
+| `ENH_ENV_PREFIX` | `HOOKSHOT_ENH_` | The switches: `enh_env("LIGHTBAR")` reads `HOOKSHOT_ENH_LIGHTBAR`. It must be a prefix `host/hos_main.c` takes from the env file |
+| `ENH_STORE_WIN`, `ENH_STORE_POSIX`, `ENH_STORE_ENV_PREFIX` | `HookshotZOT`, `hookshot-zot`, `HOOKSHOT_ZOT_` | The tools' stores (`%LOCALAPPDATA%\HookshotZOT\snapshots`, ...) and the variables that move them |
+| `VERSION_FILES`, `SAVES_SCRIPT`, `SAVES_PROGRAM` | `hookshot_version.txt`, `oot_saves.py`, `HOOKSHOT` | The save manager's game side |
+| `SNAPSHOT_FORMAT` / `SNAPSHOT_FORMATS` | `hookshot-zot-snapshot` / any `<name>-zot-snapshot` | Snapshots written / read (the forks of one game keep the same save files) |
+
+Nothing a player has changes: the switches, the stores and the photos' folder keep their names. The save manager's
+`--game` is also `--hookshot`, and a snapshot's manifest now records `product` and `game_version` (older ones'
+`hookshot_version` is still read). `tests/test_enh_product.py` fails when an Enhanced file names the product outside
+these two files, or when they disagree.
+
+Still per product, by design: the hooks in upstream files, the menu rows' texts (they must be literals in
+`gpu/vk/vk_menu.cpp`), `readme.md`'s rows, and `scripts/enhanced/build_windows.ps1`.

@@ -1,5 +1,5 @@
 // (enhanced) Hookshot Enhanced HUD editor, the renderer's side (gpu/vk/enh_hud.cpp; docs/enhanced/HUD_EDITOR.md): each HUD
-// element's settings (visible, size, X, Y, opacity), kept in enh_hud.ini beside hookshot_options.ini, answered to the host
+// element's settings (visible, size, X, Y, opacity), kept in enh_hud.ini beside the options file, answered to the host
 // through the option callback (HOS_OPT_ENH_HUD + element * 5 + field, host/enh_hud.c).
 #pragma once
 #include <string>

@@ -6,17 +6,18 @@
     python -I scripts/enhanced/zot_graphics.py diff NAME --game GAME              what applying it would change
     python -I scripts/enhanced/zot_graphics.py apply NAME --game GAME [--dry-run] [--force]
     python -I scripts/enhanced/zot_graphics.py delete NAME
-    --store DIR (any command): where profiles are kept; default %LOCALAPPDATA%\\HookshotZOT\\graphics-profiles on
-    Windows, $XDG_DATA_HOME/hookshot-zot/graphics-profiles on Linux, or $HOOKSHOT_ZOT_GRAPHICS when set.
+    --store DIR (any command): where profiles are kept; default %LOCALAPPDATA%\\<store>\\graphics-profiles on
+    Windows, $XDG_DATA_HOME/<store>/graphics-profiles on Linux, or $<prefix>GRAPHICS when set
+    (scripts/enhanced/enh_product.py: HookshotZOT, hookshot-zot and HOOKSHOT_ZOT_ for Hookshot).
 
-GAME is the game folder, the one with hookshot_options.ini (gpu/vk/vk_menu.cpp writes it beside the game). A profile is
+GAME is the game folder, the one with the options file, hookshot_options.ini for Hookshot (gpu/vk/vk_menu.cpp writes it beside the game). A profile is
 a small text file of the Graphics tab's lines (GRAPHICS_KEYS, the keys the menu saves its Graphics rows under), so the
 same profile works for every game folder. apply changes those lines only: the Audio, Gameplay and Controls lines, the
 controls and every other line stay as they are, in their order. The file as it was is copied to <store>/backups first,
 and the new one is written beside it and renamed into place.
 
 The game rewrites the whole file at every change in the menu, and reads it at the start: close the game before apply
-(it refuses while Hookshot runs; --force skips that check). Rows marked "after a restart" in the menu take effect at the
+(it refuses while the game runs; --force skips that check). Rows marked "after a restart" in the menu take effect at the
 next start anyway. Standard library only; the guide is docs/enhanced/GRAPHICS_PROFILES.md.
 """
 import argparse
@@ -29,16 +30,17 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-_spec = importlib.util.spec_from_file_location("oot_saves", os.path.join(os.path.dirname(HERE), "oot_saves.py"))
-oot = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(oot)
+_spec = importlib.util.spec_from_file_location("enh_product", os.path.join(HERE, "enh_product.py"))
+product = importlib.util.module_from_spec(_spec)   # (the product's names: scripts/enhanced/enh_product.py)
+_spec.loader.exec_module(product)
+oot = product.saves_module()
 
 Fail = oot.Fail
-OPTIONS = "hookshot_options.ini"
+OPTIONS = product.OPTIONS
 SUFFIX = ".ini"
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_ -]{0,39}$")
-HEADER = "# Hookshot Enhanced graphics profile: the Graphics tab of hookshot_options.ini (scripts/enhanced/zot_graphics.py)"
-# The Graphics tab's rows as hookshot_options.ini keys them, in the menu's order (gpu/vk/vk_menu.cpp rows and ini_key;
+HEADER = "# %s graphics profile: the Graphics tab of %s (scripts/enhanced/zot_graphics.py)" % (product.ENHANCED, OPTIONS)
+# The Graphics tab's rows as the options file keys them, in the menu's order (gpu/vk/vk_menu.cpp rows and ini_key;
 # tests/test_enh_graphics.py checks this list against them)
 GRAPHICS_KEYS = (
     "quality_preset", "ultrawide", "output_res", "handheld_profile", "dlss", "dlss_model", "resolution", "sharpness",
@@ -104,13 +106,7 @@ def label(key, value):
 
 
 def default_store():
-    env = os.environ.get("HOOKSHOT_ZOT_GRAPHICS")
-    if env:
-        return env
-    if oot.WINDOWS:
-        base = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
-        return os.path.join(base, "HookshotZOT", "graphics-profiles")
-    return os.path.join(oot.data_home(), "hookshot-zot", "graphics-profiles")
+    return product.store(oot, "graphics-profiles", "GRAPHICS")
 
 
 def check_name(name):

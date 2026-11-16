@@ -75,7 +75,7 @@ class SaveManagerTests(unittest.TestCase):
         m = json.loads((snap / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(m["format"], "hookshot-zot-snapshot")
         self.assertEqual(m["profile"], UID)
-        self.assertEqual(m["hookshot_version"], "v2.3.1")
+        self.assertEqual(m["game_version"], "v2.3.1")
         self.assertEqual({e["path"] for e in m["files"]}, set(tree(self.save)))
         files = tree(snap)
         files.pop("manifest.json")

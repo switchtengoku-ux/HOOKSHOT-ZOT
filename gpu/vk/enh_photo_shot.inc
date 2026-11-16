@@ -71,7 +71,7 @@ void enh_photo_take() {
         localtime_r(&now, &tm);
 #endif
         char name[64];
-        strftime(name, sizeof name, "Hookshot_%Y%m%d_%H%M%S", &tm);
+        strftime(name, sizeof name, ENH_PRODUCT "_%Y%m%d_%H%M%S", &tm);
 #ifdef _WIN32
         const char sep = '\\';
 #else

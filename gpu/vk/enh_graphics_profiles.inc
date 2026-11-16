@@ -1,22 +1,23 @@
 // (enhanced) Hookshot Enhanced: graphics profiles in the Insert menu's Graphics tab (docs/enhanced/GRAPHICS_PROFILES.md).
 // Included by gpu/vk/vk_menu.cpp inside its namespace, after set_row and save, before the text fields' table: it uses the
-// menu's own rows, ini_key, parse_output and save, so a profile is read and written exactly as hookshot_options.ini is.
+// menu's own rows, ini_key, parse_output and save, so a profile is read and written exactly as the options file is.
 //
 // - Graphics profile (opts.enh_gfx_profile): Left and Right choose among the saved profiles; A or Enter loads the one shown
 //   (enh_profile_load, from vk_menu.cpp's input).
 // - Save profile as (a text field, enh_profile_field_row): Enter saves the Graphics tab's settings under the name typed.
 // The profiles are scripts/enhanced/zot_graphics.py's files: <store>/<name>.ini, the Graphics tab's key=value lines, the store
-// %LOCALAPPDATA%\HookshotZOT\graphics-profiles ($XDG_DATA_HOME/hookshot-zot/graphics-profiles), or $HOOKSHOT_ZOT_GRAPHICS.
+// %LOCALAPPDATA%\<ENH_STORE_WIN>\graphics-profiles ($XDG_DATA_HOME/<ENH_STORE_POSIX>/graphics-profiles), or
+// <ENH_STORE_ENV_PREFIX>GRAPHICS (host/enh_product.h, through enh_photo.h).
 // (paths as the game's char strings, UTF-8: the exe's manifest makes that the code page, tests/test_utf8_paths.py)
 
 enum { ENH_PROFILE_NONE, ENH_PROFILE_LOADED, ENH_PROFILE_SAVED, ENH_PROFILE_NONE_YET, ENH_PROFILE_UNREADABLE,
        ENH_PROFILE_BAD_NAME, ENH_PROFILE_NO_FOLDER, ENH_PROFILE_NO_OPTIONS, ENH_PROFILE_UNWRITABLE };   // (enh_profile_texts)
 
 std::string enh_profiles_dir() {
-    if (const char* own = getenv("HOOKSHOT_ZOT_GRAPHICS"); own && *own) return own;
+    if (const char* own = enh_store_env("GRAPHICS"); own && *own) return own;
 #ifdef _WIN32
     const char* base = getenv("LOCALAPPDATA");
-    return base && *base ? std::string(base) + "\\HookshotZOT\\graphics-profiles" : std::string();
+    return base && *base ? std::string(base) + "\\" ENH_STORE_WIN "\\graphics-profiles" : std::string();
 #else
     const char* data = getenv("XDG_DATA_HOME");
     std::string base = data && *data ? data : "";
@@ -25,7 +26,7 @@ std::string enh_profiles_dir() {
         if (!home || !*home) return std::string();
         base = std::string(home) + "/.local/share";
     }
-    return base + "/hookshot-zot/graphics-profiles";
+    return base + "/" ENH_STORE_POSIX "/graphics-profiles";
 #endif
 }
 std::string enh_profile_file(const std::string& name) {
@@ -148,7 +149,7 @@ const char* enh_profile_save_apply() {
     save();
     FILE* in = fopen(ini_path().c_str(), "r");
     if (!in) return enh_profile_texts[ENH_PROFILE_NO_OPTIONS];
-    std::string body = "# Hookshot Enhanced graphics profile: the Graphics tab of hookshot_options.ini (saved in the menu)\n";
+    std::string body = "# " ENH_ENHANCED " graphics profile: the Graphics tab of " ENH_OPTIONS " (saved in the menu)\n";
     char line[128];
     while (fgets(line, sizeof line, in)) {
         const char* eq = strchr(line, '=');

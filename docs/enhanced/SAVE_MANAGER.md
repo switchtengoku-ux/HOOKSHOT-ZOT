@@ -9,7 +9,7 @@ Python 3 (standard library only). Close the game before `snapshot` and `restore`
 
 ## Commands
 
-On Windows, `--hookshot` is the game folder (the one with `user\`); on Linux it defaults to `~/.local/share/hookshot`.
+On Windows, `--game` (or `--hookshot`, the same option) is the game folder (the one with `user\`); on Linux it defaults to `~/.local/share/hookshot`.
 
 ```powershell
 python -I scripts\enhanced\zot_saves.py snapshot --hookshot "G:\Games\Hookshot" --label before-water-temple

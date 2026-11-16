@@ -9,7 +9,8 @@ off, and kept as named sets. No second loader: it reads and renames folders by h
     python -I scripts/enhanced/zot_mods.py profile apply NAME --game GAME [--dry-run]
     python -I scripts/enhanced/zot_mods.py profile list | show NAME | delete NAME
     --mods DIR instead of --game: the folder holding the mods (as HOS_MODS); --store DIR: where profiles are kept
-    (default %LOCALAPPDATA%\\HookshotZOT\\mod-profiles, $XDG_DATA_HOME/hookshot-zot/mod-profiles, or $HOOKSHOT_ZOT_MODS).
+    (default %LOCALAPPDATA%\\<store>\\mod-profiles, $XDG_DATA_HOME/<store>/mod-profiles, or $<prefix>MODS;
+    scripts/enhanced/enh_product.py: HookshotZOT, hookshot-zot and HOOKSHOT_ZOT_ for Hookshot).
 
 host/mods.c's rules (docs/mods.md), followed here:
 - the mods folder is "mods" in the game folder (beside image.bin), or HOS_MODS;
@@ -30,16 +31,17 @@ import stat
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-_spec = importlib.util.spec_from_file_location("oot_saves", os.path.join(os.path.dirname(HERE), "oot_saves.py"))
-oot = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(oot)
+_spec = importlib.util.spec_from_file_location("enh_product", os.path.join(HERE, "enh_product.py"))
+product = importlib.util.module_from_spec(_spec)   # (the product's names: scripts/enhanced/enh_product.py)
+_spec.loader.exec_module(product)
+oot = product.saves_module()
 
 Fail = oot.Fail
 OFF = ("-", "_")
 MAX_DEPTH = 4          # (host/mods.c find_mods)
 MAX_ROMFS_DEPTH = 32   # (host/mods.c index_romfs)
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_ -]{0,39}$")
-PROFILE_HEADER = "# Hookshot Enhanced mod profile: the mods on, one per line (scripts/enhanced/zot_mods.py)"
+PROFILE_HEADER = "# %s mod profile: the mods on, one per line (scripts/enhanced/zot_mods.py)" % product.ENHANCED
 
 
 class Mod:
@@ -62,13 +64,7 @@ class Mod:
 
 
 def default_store():
-    env = os.environ.get("HOOKSHOT_ZOT_MODS")
-    if env:
-        return env
-    if oot.WINDOWS:
-        base = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
-        return os.path.join(base, "HookshotZOT", "mod-profiles")
-    return os.path.join(oot.data_home(), "hookshot-zot", "mod-profiles")
+    return product.store(oot, "mod-profiles", "MODS")
 
 
 def mods_root(args):
