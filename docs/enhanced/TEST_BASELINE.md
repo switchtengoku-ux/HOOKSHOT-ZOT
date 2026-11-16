@@ -10,7 +10,7 @@ image's compilers, which explains most of the differences.
 | clang 23 (llvm-mingw) is stricter or lacks what a fixture expects: `-Werror` on new warnings, no `<algorithm>` in a C build, no `DWORD` | `test_fpx_sticky`, `test_fastfp_fma`, `test_spawn_emit`, `test_controls_key_slots`, `test_crash_dialog`, `test_upscaler_round_trip` |
 | Temp files still open when a fixture removes them (`WinError 32`) | `test_cpp_preflight`, `test_linux_preflight`, `test_make_game_cache`, `test_make_game_prepare`, `test_missing_nup` |
 | Named pipe refused (`OSError: [Errno 22]`) | `test_oot_state_tap` |
-| Source-reading checks or builder/setup fixtures that disagree with the tag's code | `test_dev_packs`, `test_hdr_encode`, `test_vram_budget_row`, `test_setup_runtime`, `test_setup_runtime_paths`, `test_portable_builder_home`, `test_portable_builder_startup`, `test_portable_setup_start`, `test_portable_setup_transaction`, `test_cpm_discovery`, `test_tested_configurations` |
+| Source-reading checks or builder/setup fixtures that disagree with the tag's code | `test_dev_packs`, `test_hdr_encode`, `test_vram_budget_row`, `test_setup_runtime`, `test_setup_runtime_paths`, `test_portable_builder_home`, `test_portable_builder_startup`, `test_portable_setup_start`, `test_portable_setup_transaction`, `test_cpm_discovery`, `test_tested_configurations`, `test_readback_late` |
 
 To compare a branch against this list:
 
