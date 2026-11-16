@@ -24,6 +24,12 @@ Settings: `hookshot_options.ini` (the menu's rows, written whole by `vk_menu.cpp
 - **Runtime features**: new files `host/enh_*.c` or `gpu/vk/enh_*.cpp`, called from upstream code through small marked
   `(enhanced)` edits. How the build picks up a new source file is still to be checked in `nx2/` before the first one.
 - **Options**: `enh_*` keys in `hookshot_options.ini`; switches `HOOKSHOT_ENH_*` in `hookshot_env.txt`.
+- **Option IDs** (the numbers the host asks the renderer for, `HOS_OPT_*` in `gpu/vk/vk_api.h`): the fork's start at
+  1000 (pad rows 1000, audio 1010, photo mode 1020, HUD editor 1100 to 1199). Upstream's grow one at a time from the
+  50s, and its main already took 59 to 71 after v2.3.1, where the fork's first IDs were: past 1000 an upstream merge
+  never gives two options one ID. The IDs never leave the running game (the options file keys rows by name), so moving
+  them changes no player's settings. `tests/test_enh_option_ids.py` keeps the split; upstream's `tests/test_option_ids.py`
+  checks that no two IDs are equal.
 - **Off switch**: every runtime feature has one, and with it off the game behaves as upstream.
 - **Docs**: `docs/enhanced/`. The fork's landing page is `.github/README.md`, so upstream's `readme.md` stays as it is.
 

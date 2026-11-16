@@ -29,3 +29,6 @@ Changes of the fork only. Upstream's are in [CHANGELOG.md](../../CHANGELOG.md).
   `scripts/enhanced/enh_product.py`, so they can be carried to another fork of the game; the save manager takes
   `--game` (`--hookshot` still works) and reads other Enhanced forks' snapshots ([ARCHITECTURE.md](ARCHITECTURE.md)).
   Nothing changes for players. Branch `feature/product-neutral`.
+- Option IDs: the fork's move to 1000 and up, away from upstream's (its main already uses 59 to 71, where the
+  fork's were); `tests/test_enh_option_ids.py` keeps them apart ([ARCHITECTURE.md](ARCHITECTURE.md)). Nothing changes for
+  players. Branch `feature/option-ids`.

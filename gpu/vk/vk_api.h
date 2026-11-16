@@ -70,19 +70,23 @@ enum { HOS_OPT_AUDIO_OUTPUT = 57 };
    start (gpu/vk/vk_replay.cpp async_on: RX_VK_ASYNC=1, or unset and the Insert menu's Threaded rendering On, or its Auto's
    choice). host/nvn_native.c answers the game's present poll at once with it. The existing option callback: no new member.) */
 enum { HOS_OPT_RENDER_THREAD = 58 };
-/* (enhanced) Hookshot Enhanced's PlayStation pad rows (Controls; host/enh_dualsense.c): Lightbar 0 Off, 1 Hearts;
-   Low-life pulse 0 Off, 1 On; Adaptive triggers 0 Off, 1 Light, 2 Strong. Past 60, which upstream keeps for its Item
-   wheel (tests/test_option_ids.py). The existing option callback: no new member. */
-enum { HOS_OPT_ENH_LIGHTBAR = 61, HOS_OPT_ENH_LOW_LIFE_RUMBLE, HOS_OPT_ENH_TRIGGERS };
-/* (enhanced) Hookshot Enhanced's Audio rows (host/enh_audio.c): Music volume and Effects volume, 0 to 150 percent */
-enum { HOS_OPT_ENH_MUSIC_VOLUME = 64, HOS_OPT_ENH_EFFECTS_VOLUME };
+/* (enhanced) Hookshot Enhanced's option IDs start at 1000, far past upstream's, which grow one at a time from
+   the 50s (upstream main took 59 to 71 after v2.3.1): an upstream merge then never gives two options one ID. The IDs live
+   only between the host and the renderer, built together; the options file keys rows by name, so moving them changes no
+   player's settings. tests/test_enh_option_ids.py keeps every Enhanced ID at or past 1000 and every other one below it.
+   Written as numbers: tests/test_option_ids.py compiles these enums alone. The existing option callback: no new member. */
+/* (enhanced) the PlayStation pad rows (Controls; host/enh_dualsense.c): Lightbar 0 Off, 1 Hearts; Low-life pulse 0 Off,
+   1 On; Adaptive triggers 0 Off, 1 Light, 2 Strong */
+enum { HOS_OPT_ENH_LIGHTBAR = 1000, HOS_OPT_ENH_LOW_LIFE_RUMBLE, HOS_OPT_ENH_TRIGGERS };
+/* (enhanced) the Audio rows (host/enh_audio.c): Music volume and Effects volume, 0 to 150 percent */
+enum { HOS_OPT_ENH_MUSIC_VOLUME = 1010, HOS_OPT_ENH_EFFECTS_VOLUME };
 /* (enhanced) the photo mode (gpu/vk/enh_photo.cpp): 1 while on; the host hides the HUD, holds the world and moves the free
    camera from it (host/enh_photo.c) */
-enum { HOS_OPT_ENH_PHOTO = 66 };
+enum { HOS_OPT_ENH_PHOTO = 1020 };
 /* (enhanced) the HUD editor (gpu/vk/enh_hud.cpp, host/enh_hud.c): HOS_OPT_ENH_HUD + element * 5 + field (visible 0/1,
-   size percent, X and Y canvas units, opacity percent), for HOS_ENH_HUD_ELEMENTS elements: 70 to 99 */
+   size percent, X and Y canvas units, opacity percent), for HOS_ENH_HUD_ELEMENTS elements: 1100 to 1199 */
 #define HOS_ENH_HUD_ELEMENTS 6
-enum { HOS_OPT_ENH_HUD = 70 };
+enum { HOS_OPT_ENH_HUD = 1100 };
 
 /* (hookshot) the controls' names (host/nn_hid.c, host/pad_sdl.c, the pad_ and key_ lines of hookshot_options.ini):
    the Switch's buttons in nn::hid's bit order, and a gamepad's inputs by position (the bottom face button first:

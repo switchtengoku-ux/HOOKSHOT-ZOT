@@ -73,7 +73,7 @@ def main():
         body = menu[menu.index(fn):]
         body = body[:body.index("}")]
         assert '"Music volume"' in body and '"Effects volume"' in body, "vk_menu.cpp %s leaves the rows out" % fn
-    assert "HOS_OPT_ENH_MUSIC_VOLUME = 64" in api, "the Audio rows' option IDs moved"
+    assert "HOS_OPT_ENH_MUSIC_VOLUME = 1010" in api, "the Audio rows' option IDs moved"
     with tempfile.TemporaryDirectory() as tmp:
         src, exe = Path(tmp) / "fixture.c", Path(tmp) / "fixture.exe"
         src.write_text(FIXTURE, encoding="utf-8")
