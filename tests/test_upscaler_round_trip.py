@@ -47,6 +47,16 @@ FIXTURE = r'''
 #include <iterator>
 #include <sys/stat.h>   // (save(): an options file that is a link is written through, not replaced)
 #include <mutex>
+#include <cerrno>   // (save(): what failed, the options file's mode, its move)
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 #include <string>
 #include <utility>
 #include <vector>
@@ -109,6 +119,11 @@ struct Host { int (*binding)(int, int, int); float (*aspect_ratio)(); } *host = 
 bool can_bind() { return false; }
 // No hardware profile or measured tuning owns the manual round trips.
 uint64_t auto_for = 0, auto_fp = 0, auto_tuned = 0;
+#include "gpu_choice.h"   // (the GPU device row saved as the card itself, which save() writes)
+namespace gpu_choice = mkwvk::gpu_choice;
+std::vector<gpu_choice::Card> gpu_device_cards;
+std::string gpu_saved_card;
+bool gpu_card_missing = false;
 ::auto_settings::Choice auto_choice{};
 ::auto_settings::Tuning auto_tuning{};
 /* SAVE */
@@ -118,15 +133,12 @@ void restart() {
     auto_for = auto_tuned = 0;
     auto_tuning = {};
     // The hardware stand-ins (auto_choice and auto_fp) describe the same PC after a restart.
-    bool has_options = false, has_output = false, has_vram_budget = false, has_memory_budget = false;
+    bool has_options = false, has_output = false, has_memory_budget = false;
     /* LOAD */
-    CHECK(has_options && !has_output && has_memory_budget && !has_vram_budget);
+    CHECK(has_options && !has_output && has_memory_budget);
 }
 void apply_pad_layout(int) {}
 int detect_pad_layout() { return opts.pad_layout; }
-void sync_preset_budgets(int) {}
-void vram_budget_sync() {}
-constexpr int kVramMinimumOnly = 1;
 namespace mr { constexpr int kMax = 8; struct State { void note(const int*) {} }; }
 mr::State restart_state;
 void restart_values(int*) {}
@@ -136,7 +148,7 @@ void samplers_changed() {}
 void temporal_reset_failure() {}
 void prompts_at_once(const Row&) {}
 /* STOPS */
-void apply_auto(bool keep_own);
+void apply_auto();
 /* PRESET */
 /* APPLY_AUTO */
 /* SET_ROW */

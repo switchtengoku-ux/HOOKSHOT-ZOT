@@ -39,7 +39,7 @@ VkPipeline compute_pipeline_from_caches(const Program& p);
 VkPipeline compute_pipeline_by_module_id(const Program& p, const uint8_t* id, uint32_t size);
 /// A pipeline made ahead of its first draw: the draw's lookup takes it (graphics_pipeline). False: that key has one already,
 /// and pl is destroyed
-bool pipeline_keep_ready(uint64_t key, VkPipeline pl);
+bool pipeline_keep_ready(uint64_t key, VkPipeline pl, const Program* made_from);   // (made_from: graphics_pipeline)
 void program_layout(Program& p);   // (ensure_layout)
 /// The compute program variants this install's play dispatched before (hookshot_compute_variants.bin): key, variant
 std::vector<std::pair<uint64_t, uint64_t>> compute_variants_learned();

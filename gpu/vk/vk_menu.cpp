@@ -20,6 +20,7 @@
 #include <cmath>
 #include <utility>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <iterator>
 #include <mutex>
@@ -34,6 +35,7 @@
 
 #include "vk_paths.h"
 #include "vk_menu.h"
+#include "intel_compiles.h"
 #include "vk_menu_hit.h"
 #include "vk_fps.h"    // (the FPS counter's levels and numbers)
 #include "vk_draw.h"   // (pipeline_cache_save: Restart now keeps what was built)
@@ -49,6 +51,7 @@
 #include "vk_fsr3.h"      // (the Upscaler row: whether AMD FSR 3.1 runs on this GPU)
 #include "vk_fsr3fi.h"    // (the Frame generation row: whether FSR 3.1 makes the frame)
 #include "vk_fsr4.h"
+#include "vk_xess.h"
 #include "vk_temporal.h"
 #include "vk_reflex.h"
 #include "vk_antilag.h"
@@ -68,7 +71,7 @@
 #include <csignal>
 #include <cerrno>
 #include <pthread.h>
-#include <sys/stat.h>
+#include <sys/stat.h>   // (save: the options file's mode)
 #include <sys/utsname.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -82,6 +85,7 @@ extern char** environ;
 namespace mkwvk {
 int display_refresh_mhz();   // (vk_main.cpp: the window's display, asked once a second at most: the FPS counter's V-Sync target)
 HWND app_window();
+extern std::atomic<bool> present_native_pq;   // (vk_replay.cpp: the presented picture is Native HDR, bypassing the SDR CRT filters)
 
 Options opts;
 
@@ -181,6 +185,14 @@ const char* tx_upscale(int v) {
 }
 /// The Window scaling filter row's value: its filter, or that none is needed (the saved value stays, for another window size)
 const char* tx_filter(int v) { return filter_needed() ? tx_upscale(v) : "Not needed (window = output)"; }
+const char* tx_crt_filter(int v) {
+    static const char* const t[] = {"Off", "Lottes aperture grille", "Lottes consumer TV", "Hyllian Fast", "zfast CRT"};
+    return (unsigned)v < std::size(t) ? t[v] : t[0];
+}
+const char* tx_crt_lines(int v) {
+    static const char* const t[] = {"240", "480", "720"};
+    return (unsigned)v < std::size(t) ? t[v] : t[0];
+}
 const char* tx_reflex(int v) {
     static const char* t[] = {"Off", "On", "On + Boost"};
     return t[reflex_available() ? std::clamp(v, 0, 2) : 0];
@@ -198,24 +210,26 @@ const char* hn_antilag(int v, int variant) {
     return variant <= 0 ? t[v ? 1 : 0] : nullptr;
 }
 // The Upscaler (opts.dlss): what scales the 3D up to the output. DLSS and DLAA only where dlss_why() lets them run, FSR 3.1
-// only where vk_fsr3.cpp says it does, FSR 4 and its native AA only where fsr4_why() does, Off (no upscaler: vk_temporal.cpp
-// temporal_off) everywhere; the menu shows (and steps from) what runs, and keeps the saved choice for a PC where it can
+// only where vk_fsr3.cpp says it does, FSR 4 and its native AA only where fsr4_why() does, Intel XeSS and its Native AA only
+// where xess_why() does, Off (no upscaler: vk_temporal.cpp temporal_off) everywhere; the menu shows (and steps from) what runs,
+// and keeps the saved choice for a PC where it can
 namespace ur = upscaler_rows;
 /// One bit per upscaler that runs here (upscaler_rows.h bit). Each backend caches its own answer, so this costs nothing
 unsigned upscalers_available() {
     return ur::bit(ur::GAME) | ur::bit(ur::OFF) | ur::dlss_bits(dlss_why() == DLSS_OK) |
-           (fsr3::supported() ? ur::bit(ur::FSR3) : 0u) | ur::fsr4_bits(fsr4_why() == FSR_OK);
+           (fsr3::supported() ? ur::bit(ur::FSR3) : 0u) | ur::fsr4_bits(fsr4_why() == FSR_OK) |
+           ur::xess_bits(xess_why() == XESS_OK);
 }
-/// (FSR 3.1 has inputs of its own; DLSS and FSR 4 run on the frame chain they share, temporal_mode; Off is neither)
+/// (FSR 3.1 has inputs of its own; DLSS, FSR 4 and XeSS run on the frame chain they share, temporal_mode; Off is neither)
 int upscaler() { return fsr3_wanted() ? (int)ur::FSR3 : temporal_off() ? (int)ur::OFF : temporal_mode(); }
 const char* tx_upscaler(int) {
     static const char* t[ur::kUpscalers] = {"Game's own", "NVIDIA DLSS", "NVIDIA DLAA", "AMD FSR 3.1", "AMD FSR 4",
-                                            "AMD FSR 4 Native AA", "Off (no upscaling)"};
-    // (by engine: DLAA and FSR 4's native AA are the Render resolution row's Native, upscaler_rows.h engine)
+                                            "AMD FSR 4 Native AA", "Off (no upscaling)", "Intel XeSS", "Intel XeSS Native AA"};
+    // (by engine: DLAA and FSR 4's and XeSS's native AA are the Render resolution row's Native, upscaler_rows.h engine)
     return t[std::clamp(ur::engine(upscaler()), 0, ur::kUpscalers - 1)];
 }
-/// The Upscaler: the one shown (what runs, upscaler()), and with the game's own, why DLSS and FSR are not offered. Variants
-/// (every one): each value, then the game's own with each of DLSS's reasons, then with each of FSR's
+/// The Upscaler: the one shown (what runs, upscaler()), and with the game's own, why DLSS, FSR and XeSS are not offered.
+/// Variants (every one): each value, then the game's own with each of DLSS's reasons, then with each of FSR's, then XeSS's
 const char* hn_upscaler(int v, int variant) {
     static const char* const t[ur::kUpscalers] = {
         "The game's own network.",
@@ -230,6 +244,9 @@ const char* hn_upscaler(int v, int variant) {
         "AMD's machine-learned upscaler, the 3D at full size with its edges smoothed; the slowest.",
         "No upscaler, not even the game's network: the 3D is stretched to the output with a plain linear filter. The "
         "fastest choice and the roughest picture: no edge smoothing, and softer below 100%.",
+        "Intel's machine-learned upscaler, from a smaller 3D, with Intel's libxess.dll beside the game. Things that move by "
+        "themselves can trail for now.",
+        "Intel's machine-learned upscaler, the 3D at full size with its edges smoothed; the slowest.",
     };
     static const char* const dlss_no[DLSS_WHY_COUNT] = {
         nullptr,
@@ -247,25 +264,37 @@ const char* hn_upscaler(int v, int variant) {
         "AMD FSR 4: AMD's files were not found beside the game (see the readme).",
         "AMD FSR 4: AMD's files have no FSR 4 for this GPU.",
     };
-    // (now: the value shown and what runs here, with both engines' reasons; every one: as said above)
-    int d = 0, f = 0;
+    static const char* const xess_no[XESS_WHY_COUNT] = {
+        nullptr,
+        "Intel XeSS: Windows only (Intel makes no XeSS library for Linux).",
+        "Intel XeSS: off for this run (RX_VK_XESS=0).",
+        "Intel XeSS: Intel's libxess.dll was not found beside the game (see the readme).",
+        "Intel XeSS: the GPU or its Vulkan driver lacks what XeSS needs.",
+        "Intel XeSS: Intel's library does not run on this GPU or driver.",
+    };
+    // (now: the value shown and what runs here, with every engine's reasons; every one: as said above)
+    int d = 0, f = 0, x = 0;
     if (variant < 0) {
-        v = std::clamp(upscaler(), 0, ur::kUpscalers - 1), d = (int)dlss_why(), f = (int)fsr4_why();
+        v = std::clamp(upscaler(), 0, ur::kUpscalers - 1), d = (int)dlss_why(), f = (int)fsr4_why(), x = (int)xess_why();
     } else if (v == ur::GAME) {
         if (variant < DLSS_WHY_COUNT) d = variant;
         else if (variant < DLSS_WHY_COUNT + FSR_WHY_COUNT - 1) f = variant - DLSS_WHY_COUNT + 1;
+        else if (variant < DLSS_WHY_COUNT + FSR_WHY_COUNT + XESS_WHY_COUNT - 2) x = variant - DLSS_WHY_COUNT - FSR_WHY_COUNT + 2;
         else return nullptr;
     } else if (variant > 0) {
         return nullptr;
     }
     v = std::clamp(v, 0, ur::kUpscalers - 1);
-    // (the reasons are said only where the engine is in the build: one without FSR does not tell an NVIDIA user why)
+    // (the reasons are said only where the engine is in the build: one without FSR does not tell an NVIDIA user why, and a
+    // Linux build does not tell anyone that XeSS is Windows only)
     const char* dn = dlss_built() || variant >= 0 ? dlss_no[d] : nullptr;
     const char* fn = fsr4_built() || variant >= 0 ? fsr_no[f] : nullptr;
-    if (v != ur::GAME || (!dn && !fn)) return t[v];
-    static char b[DLSS_WHY_COUNT][FSR_WHY_COUNT][320];
-    snprintf(b[d][f], sizeof b[d][f], "%s%s%s%s%s", t[0], dn ? " " : "", dn ? dn : "", fn ? " " : "", fn ? fn : "");
-    return b[d][f];
+    const char* xn = xess_built() || variant >= 0 ? xess_no[x] : nullptr;
+    if (v != ur::GAME || (!dn && !fn && !xn)) return t[v];
+    static char b[DLSS_WHY_COUNT][FSR_WHY_COUNT][XESS_WHY_COUNT][400];
+    snprintf(b[d][f][x], sizeof b[d][f][x], "%s%s%s%s%s%s%s", t[0], dn ? " " : "", dn ? dn : "", fn ? " " : "", fn ? fn : "",
+             xn ? " " : "", xn ? xn : "");
+    return b[d][f][x];
 }
 /// The DLSS model row (opts.dlss_model): NVIDIA's network by its preset, or RX_VK_DLSS_PRESET's for this run
 const char* dlss_preset_env() {
@@ -626,16 +655,17 @@ const char* tx_resolution(int v) {
     const int up = upscaler();
     // (each stop with the 3D's real size, the render input: a twelfth of the picture (game_size), Native
     // the picture itself)
-    if (up == ur::DLAA || up == ur::FSR4_AA) {
+    if (up == ur::DLAA || up == ur::FSR4_AA || up == ur::XESS_AA) {
         const Out o = shown_output();
-        snprintf(b, sizeof b, "Native (%s, %ux%u)", up == ur::DLAA ? "DLAA" : "FSR 4", o.w, o.h);
+        snprintf(b, sizeof b, "Native (%s, %ux%u)", up == ur::DLAA ? "DLAA" : up == ur::FSR4_AA ? "FSR 4" : "XeSS", o.w, o.h);
         return b;
     }
     v = ur::snap_render(up, v);   // (show the active engine's size without overwriting the player's saved scale)
     if (!ur::percent(v)) return "Auto (dynamic)";
     uint32_t w, h;
     game_size(ur::percent(v) / 100.0f, w, h);
-    if (const char* mode = ur::scales_by_mode(up) ? ur::dlss_mode_name(v) : nullptr) {
+    // (XeSS: the preset whose range holds the share, upscaler_rows.h xess_mode_name)
+    if (const char* mode = up == ur::XESS ? ur::xess_mode_name(v) : ur::scales_by_mode(up) ? ur::dlss_mode_name(v) : nullptr) {
         snprintf(b, sizeof b, "%s %d%% (%ux%u)", mode, ur::percent(v), w, h);
         return b;
     }
@@ -649,6 +679,7 @@ const char* hn_resolution(int v, int variant) {
     // (Native is the slider's top: the 3D at the picture's full size)
     if (up == ur::DLAA) return "DLAA: the 3D at the picture's full size, anti-aliased by DLSS. The sharpest, and the heaviest.";
     if (up == ur::FSR4_AA) return "FSR 4's native AA: the 3D at the picture's full size. The sharpest, and the heaviest.";
+    if (up == ur::XESS_AA) return "XeSS's Native AA: the 3D at the picture's full size. The sharpest, and the heaviest.";
     const int p = ur::percent(ur::snap_render(up, v));
     if (up == ur::DLSS) {
         switch (p) {
@@ -672,6 +703,18 @@ const char* hn_resolution(int v, int variant) {
         case 50: return "FSR's Performance mode, 2x: faster, and softer.";
         case 33: return "FSR's Ultra Performance mode, 3x: its fastest, and its softest.";
         default: return nullptr;   // (not one of FSR's steps: the row moves to one)
+        }
+    }
+    if (up == ur::XESS) {   // (each stop under the XeSS preset whose range holds it: xess_rules.h)
+        switch (p) {
+        case 0: return "The game lowers it when the GPU is busy, and XeSS follows.";
+        case 92: case 83: return "XeSS's Ultra Quality Plus mode, 1.3x: sharper than Ultra Quality, a little slower.";
+        case 75: return "Between Ultra Quality Plus and Ultra Quality, under XeSS's Ultra Quality mode.";
+        case 67: return "XeSS's Ultra Quality mode, 1.5x.";
+        case 58: return "Between XeSS's Quality and Balanced, under its Balanced mode.";
+        case 50: return "XeSS's Balanced mode, 2x: faster, and softer.";
+        case 33: return "XeSS's Ultra Performance mode, 3x: its fastest, and its softest.";
+        default: return nullptr;   // (not one of the slider's stops: the row moves to one)
         }
     }
     if (up == ur::OFF) {   // (no upscaler: the 3D stretched to the output as it is drawn)
@@ -773,7 +816,7 @@ const char* tx_pad_layout(int v);
 // host lets the default stand in and opens it again once it is back, and the name stays in the ini. In the ini the name is
 // cut to kMicNameKept bytes (at a character's start), so the line fits the 80-byte readers of the file (host/nn_hid.c,
 // nn_applet.c, hos_main.c), and a name is matched by that much of it
-constexpr int kMaxMics = 16;
+constexpr int kMaxMics = 64;
 constexpr size_t kMicNameKept = 60;
 std::string mic_want;      // (the chosen microphone's name, cut to kMicNameKept; empty: Off or the default chosen)
 bool mic_missing = false;  // (mic_want is not plugged in: the row's last entry, 2 + mic_listed, stands for it)
@@ -882,39 +925,6 @@ const char* tx_preset(int v) {
                               "Auto (this PC)"};
     return t[std::min(std::max(v, 0), 6)];
 }
-// (hookshot) The VRAM budget row's choices: the texture and mirror budgets in MB (0: Auto, the renderer's own rule). The presets'
-// budgets are among them (preset_vram_budget), so a preset sets the row, and the row can also be chosen on its own (null and
-// Gummi, #dev-work 2026-11-10: the presets were the only way to set a limit)
-constexpr int kVramBudgets = 8;
-constexpr int kVramMinimumOnly = 1;   // (2.2 GB: set by the Minimum (4GB) preset only; the row's own steps go past it)
-constexpr int kVramTextureMb[kVramBudgets] = {0, 2200, 3600, 4800, 6144, 7500, 9216, 11000};
-// (hookshot) 3.6 GB's mirrors, the Low (6GB) preset's and so every 6 GB card's from its first start (menu_first_start_for_gpu): 1536
-// MB, not 512, what Auto gives a 6 GB card too (mirror_budget.h auto_bytes). At 512 the game's pools left out of VRAM were read over
-// PCIe, 30-32 GB of bound ranges every 600 submits in Hyrule Field on an RTX 3060 Laptop (6 GB), the GPU's frame 27 ms. A preset's
-// mirrors are never more than Auto's on the card (mirror_budget.h budget_bytes): Low on a 4 GB card, which preset_caps_memory lets
-// through, keeps 512
-constexpr int kVramMirrorMb[kVramBudgets] = {0, 256, 1536, 1024, 1536, 2048, 2560, 3072};
-int preset_vram_budget(int p) {
-    static const int of[] = {0, 1, 2, 3, 5, 7};   // (none: Auto; Minimum 2.2 GB, Low 3.6, Balanced 4.8, High 7.5, Ultra 11)
-    return of[std::min(std::max(p, 0), 5)];
-}
-void vram_budget_sync() {
-    const int b = std::min(std::max(opts.vram_budget, 0), kVramBudgets - 1);
-    opts.vram_mb = kVramTextureMb[b];
-    opts.mirror_mb = kVramMirrorMb[b];
-}
-const char* tx_vram_budget(int v) {
-    static const char* t[kVramBudgets] = {"Auto", "2.2 GB (4GB preset)", "3.6 GB", "4.8 GB", "6 GB", "7.5 GB", "9 GB", "11 GB"};
-    return t[std::min(std::max(v, 0), kVramBudgets - 1)];
-}
-MENU_HINTS(hn_vram_budget, 0, "Set from what the driver allows: 70% of it, 45% on cards of 8 GB or less, at most 6 GB.",
-           "For 4 GB cards.", "For 6 GB cards.", "For 8 GB cards.", "The most Auto ever sets.", "For 12 GB cards.", nullptr,
-           "For 16 GB cards.")
-/// a preset's budgets (0: none, Auto): the VRAM budget row set to them
-void sync_preset_budgets(int p) {
-    opts.vram_budget = preset_vram_budget(p);
-    vram_budget_sync();
-}
 // (Sharpness: tuned for the window pass's neighbours one picture pixel apart, each about the old setting's sharpening on a
 // 3840 x 2160 window at that preset's picture, 2048 x 1152 or the handheld profile's 1536 x 864: same frame, mean |Laplacian|
 // of the window and of the picture, on the slider's steps)
@@ -925,10 +935,12 @@ uint64_t auto_for = 0;               // (the fingerprint of the hardware the opt
 uint64_t auto_fp = 0;                // (this PC's, menu_auto_for_gpu)
 uint64_t auto_tuned = 0;             // (the fingerprint the measured tuning in play finished for: auto_tuned=)
 ::auto_settings::Tuning auto_tuning;   // (the measured tuning in play, menu_auto_tune; its steps kept as auto_steps=)
-void apply_auto(bool keep_own);   // (below: the Auto preset's rows)
+std::string gpu_saved_card;           // (the GPU device row's card as the options file saved it, gpu_device_id=: gpu_choice.h)
+bool gpu_card_missing = false;        // (that card is not among this run's GPUs: menu_set_gpu_count)
+void apply_auto();   // (below: the Auto preset's rows)
 void apply_preset(int p) {
     if (p == kAutoPreset) {
-        apply_auto(false);   // (chosen on the row: all of its rows, as any preset)
+        apply_auto();   // (chosen on the row: all of its rows, as any preset)
         return;
     }
     // (the rows it sets are the preset's from now on, even at the value the environment forced: save writes them)
@@ -962,35 +974,26 @@ void apply_preset(int p) {
     // (the Upscaler and Frame generation are the player's: a preset never turns DLSS or made frames on or off. With DLSS
     // its resolution is DLSS's nearest mode)
     if (p > 0) opts.resolution = ur::snap_render(upscaler(), opts.resolution);   // (a slider stop kept)
-    opts.budget = p;   // (Custom chosen on this row: no budget, as before)
-    sync_preset_budgets(p);
+    opts.budget = p;   // (Custom chosen on this row: none, as before)
 }
-/// keep_own (Auto choosing again for new hardware): the VRAM budget row the player set under Auto stays theirs (budget 0,
-/// set_row). The Output resolution Auto never sets (auto_settings.h Choice: the game's own or the player's, read at boot), nor
+/// The Output resolution Auto never sets (auto_settings.h Choice: the game's own or the player's, read at boot), nor
 /// Mesh shaders (RX_VK_MESH_SHADERS), and the fingerprint has the card's mesh shaders, not this run's mode
-void apply_auto(bool keep_own) {
+void apply_auto() {
     const ::auto_settings::Choice& c = auto_choice;
     if (c.tier < 1) return;
-    const bool own_budget = keep_own && opts.preset == kAutoPreset && opts.budget == 0;
-    const int vram_budget = opts.vram_budget;
     env_release(&opts.dlss);
     opts.dlss = c.upscaler;   // (before the tier's rows: apply_preset snaps its Render resolution to this upscaler)
-    apply_preset(c.tier);   // (the tier's scaling rows and memory budgets)
+    apply_preset(c.tier);   // (the tier's scaling rows)
     if (c.tier == 1) opts.upscale = 0, opts.sharpness = 0;   // (the plain scale, as RX_VK_LOW_SPEC: the lightest)
     opts.handheld = 0;   // (docked: the handheld profile gave a GTX 1050 a black picture; the Render resolution lightens the card)
     if (c.resolution) opts.resolution = ur::snap_render(c.upscaler, c.resolution);
-    if (own_budget) {
-        opts.budget = 0;
-        opts.vram_budget = vram_budget;
-        vram_budget_sync();
-    }
     auto_tuned = 0;   // (chosen again: measured again in play)
     auto_tuning = {};
     opts.preset = kAutoPreset;   // (apply_preset set the tier's number)
     auto_for = auto_fp;          // (chosen for this PC, whether at a start or on the menu's row)
 }
 
-MENU_HINTS(hn_preset, 0, "Each row as you set it. Changing most rows yourself comes back to Custom; the VRAM budget row keeps its value.",
+MENU_HINTS(hn_preset, 0, "Each row as you set it. Changing most rows yourself comes back to Custom.",
            "Resolution 50% (with DLSS its nearest mode), Lanczos, Sharpness 30%, the Handheld Profile.",
            "Resolution 75% (with DLSS its nearest mode), Lanczos, Sharpness 30%, the Handheld Profile.",
            "Resolution 100% (with DLSS its nearest mode), Catmull-Rom, Sharpness 30%.",
@@ -1156,6 +1159,22 @@ const char* hn_filter(int v, int variant) {
     if (variant < 0) return filter_needed() ? t[std::clamp(v, 0, 2)] : none;
     return variant == 0 ? t[std::clamp(v, 0, 2)] : variant == 1 ? none : nullptr;
 }
+const char* hn_crt_filter(int v, int variant) {
+    static const char* const t[] = {
+        "Off: no extra CRT passes or image allocations.",
+        "Timothy Lottes' crt-lottes: flat aperture grille, a PVM-style look, not a calibrated Sony model.",
+        "Timothy Lottes' crt-lottes: curved consumer TV with a shadow mask and beam bloom.",
+        "Hyllian's crt-hyllian-fast: cubic reconstruction, scanlines and a magenta/green mask.",
+        "Greg Hogan's zfast CRT: softer scanlines and a monochrome aperture mask."};
+    if (variant < 0)
+        variant = v > 0 && (unsigned)v < std::size(t) && present_native_pq.load(std::memory_order_relaxed) ? 1 : 0;
+    if (variant == 1)
+        return "Bypassed: the game is presenting Native HDR (PQ). The saved CRT choice is kept; SDR and Expanded HDR can use it.";
+    return hint_in(t, (int)std::size(t), 0, v, variant);
+}
+MENU_HINTS(hn_crt_lines, 0, "240 virtual lines: a coarser raster and wider scanline spacing.",
+           "480 virtual lines: a finer raster, reduced when the destination is too small.",
+           "720 virtual lines: the finest raster, reduced when the destination is too small.")
 /// Sharpness: with DLSS or DLAA, the amount that suits them
 const char* hn_sharpness(int v, int variant) {
     static const char* const dlss = "DLSS and DLAA look softer than the game's own upscaler: around 80% suits them.";
@@ -1181,25 +1200,28 @@ MENU_HINTS(hn_texture_detail, 0, "Full detail, but on a card with 4.5 GB or less
            "Every texture at the game's own size (the very largest still trimmed to fit).",
            "The big textures' largest level left out above 1024 texels: about a quarter of their memory.",
            "The big textures down to 512 texels: the least memory, the softest picture.")
-const char* tx_intel_compiles(int v) { return v ? "Side by side" : "One at a time"; }
+const char* tx_intel_compiles(int v) { return v == 1 ? "Side by side" : v == 2 ? "One at a time" : "Auto"; }
 /// (the Intel shader compiles row's line: RX_VK_NO_INTEL_SERIAL holds it, as RX_VK_ASTC_RGBA8 the ASTC row)
 const char* hn_intel_compiles(int v, int variant) {
     if (variant <= 0 && getenv("RX_VK_NO_INTEL_SERIAL"))
         return "Set by RX_VK_NO_INTEL_SERIAL (hookshot_env.txt or the environment): remove that line to choose here.";
-    static const char* const t[] = {"The safe choice, and the best on a CPU with 4 cores or fewer: a shader Intel's compiler "
-                                    "faults on is left out instead of closing the game.",
+    static const char* const t[] = {"Side by side on the Arc B-series (driver 101.9154 or newer), where it was measured; one at "
+                                    "a time on other Intel graphics.",
                                     "Shaders are built faster on a CPU with many cores, but Intel's driver can crash the game "
-                                    "while it builds them."};
-    return hint_in(t, 2, 0, v, variant);
+                                    "while it builds them.",
+                                    "The safe choice, and the best on a CPU with 4 cores or fewer: a shader Intel's compiler "
+                                    "faults on is left out instead of closing the game."};
+    return hint_in(t, 3, 0, v, variant);
 }
 MENU_HINTS(hn_robust, 0, "On, on every card.", "Can be faster on some NVIDIA cards.", "Always on.")
 MENU_HINTS(hn_fps, 0, nullptr, "The frame rate. With frame generation on, the game's own rate too.",
-           "And the game's frame time, with its 1% low: the rate of its slowest 1% of frames over the last 10 seconds.",
+           "And the game's frame time, with its 1% low: the mean time of its slowest 1% of frames over the last 10 seconds.",
            "And a graph of the last 4 seconds' frame times, with a line at the Game frame rate cap's.",
-           "And where each frame's time goes: the game, the renderer, waiting for the GPU, waiting for its turn (frame pacing, "
-           "vsync); the GPU's own time; red marks where shaders were built or draws left out.",
-           "And the renderer's own numbers, for debugging: video memory, textures, draws, dispatches and render passes a "
-           "frame, draws skipped, texture uploads and pipelines built.")
+           "And where each frame's time goes, as colours in the graph: the game, the renderer, its waits on the render thread "
+           "and the GPU, pacing (frame rate cap, vsync); with threaded rendering, a lane for the render thread's time; the "
+           "GPU's own time; red marks where shaders were built or draws left out.",
+           "And, for debugging, the CPU, GPU and driver, and the renderer's own numbers: video memory, textures, draws, "
+           "dispatches and render passes a frame, draws skipped, texture uploads and pipelines built.")
 MENU_HINTS(hn_menu_size, 1, "Smaller, for a desk.", "The usual size.", "Larger, for a TV across the room.")
 MENU_HINTS(hn_speed, 0, "A step each frame: the game slows down whenever it runs below 60 fps.",
            "Normal speed down to 15 fps, by taking longer steps.")
@@ -1303,7 +1325,7 @@ Row rows[] = {
     // Quality preset first, as it sets rows in every section. (Reflex, Anti-Lag 2, the Upscaler and the DLSS model only where
     // they run here; HDR's paper white and peak brightness only with HDR on: row_shown)
     {TAB_GRAPHICS, "Quality preset", &opts.preset, 0, 6, 1, tx_preset,
-     "Sets the scaling rows and memory limits for a GPU with that much memory. The Upscaler and Frame generation stay yours.",
+     "Sets the scaling rows for a GPU with that much memory. The Upscaler and Frame generation stay yours.",
      hn_preset},
     // (the picture's way, top to bottom: the output's size, what fills it from the 3D, the 3D's size, its sharpening; then
     // the frames, and the window it is shown in)
@@ -1365,6 +1387,12 @@ Row rows[] = {
      "Whether a frame waits for the display's refresh before it is shown. Changes at once.", hn_vsync, false, true},
     {TAB_GRAPHICS, "Window scaling filter", &opts.upscale, 0, 2, 1, tx_filter,
      "How the finished picture is scaled to the window, when its size differs from the Output resolution.", hn_filter},
+    {TAB_GRAPHICS, "CRT filter", &opts.crt_filter, 0, 4, 1, tx_crt_filter,
+     "Filters the finished picture, including the game's HUD, after window effects. Hookshot's menu and overlays stay "
+     "clean. Changes at once; quality presets leave it alone.", hn_crt_filter, false, true},
+    {TAB_GRAPHICS, "CRT lines", &opts.crt_lines, 0, 2, 1, tx_crt_lines,
+     "Virtual CRT raster, not Render resolution. Capped at half the destination height (at least one line); width follows "
+     "its aspect. Non-integer scaling can cause moire.", hn_crt_lines, false, true},
     {TAB_GRAPHICS, "Ultrawide menus", &opts.wide_menus, 0, 2, 1, tx_wide_menus,
      "With the Aspect ratio at the monitor's shape: the pause, item and map menus, and what shows beside them. Loading "
      "screens and pre-rendered movies, which draw no world either, get the same sides. Changes at once.", hn_wide_menus, false, true},
@@ -1403,9 +1431,6 @@ Row rows[] = {
     {TAB_GRAPHICS, "Threaded rendering", &opts.threaded_rendering, 0, 2, 1, tx_vsync,
      "Draws the picture on threads of its own, beside the game's, on a processor with threads to spare. Applies after a "
      "restart.", hn_threaded, true, true},
-    {TAB_GRAPHICS, "VRAM budget", &opts.vram_budget, 0, kVramBudgets - 1, 1, tx_vram_budget,
-     "How much video memory the game's textures may use, and its copies of game memory with them. Lower it if the game "
-     "stutters after a while of play; a preset sets it.", hn_vram_budget, false, true},
     // (no Mesh shaders row: changing it translated every shader again at the next start, for nothing a player gains. A launch
     // switch now, RX_VK_MESH_SHADERS: gpu/vk/mesh_mode.h)
 
@@ -1611,7 +1636,7 @@ Row rows[] = {
      "Big ASTC textures kept as decoded RGBA8 instead of re-encoded to BC3: a workaround for texture artifacts seen on some AMD "
      "cards (issues 57 and 1006). Takes far more video memory. Applies after restart.", hn_astc_rgba8, true, true},
     // (hookshot, Intel graphics on Windows only: row_shown) IntelDriverGate, vk_internal.h
-    {TAB_DEBUG, "Intel shader compiles", &opts.intel_compiles, 0, 1, 1, tx_intel_compiles,
+    {TAB_DEBUG, "Intel shader compiles", &opts.intel_compiles, 0, 2, 1, tx_intel_compiles,
      "Intel graphics: how many shaders Intel's compiler is given at once. Applies after a restart.", hn_intel_compiles, true, true},
     // (hookshot, Intel graphics on Windows only: row_shown) vk_draw.cpp compute_optimize
     {TAB_DEBUG, "Intel quick compute builds", &opts.intel_quick, 0, 1, 1, tx_onoff,
@@ -1621,7 +1646,7 @@ Row rows[] = {
     // (hookshot, integrated graphics only: row_shown) weak_laptop_apply
     {TAB_DEBUG, "Set up for a weak laptop", nullptr, 0, 0, 0, nullptr,
      "For integrated graphics with 4 CPU threads or fewer (an i3 laptop's UHD Graphics): Render resolution 33% with the game's own "
-     "upscaler, the plain window scale without sharpening, the handheld profile, the smallest memory budgets, Intel's shaders "
+     "upscaler, the plain window scale without sharpening, the handheld profile, smaller textures, Intel's shaders "
      "one at a time and quick compute builds. The handheld profile applies after a restart."},
     // (hookshot) the Gameplay tab's Bug report (vk_bug_report.h): A or Enter writes the report's folder; the help says what is in it
     {TAB_GAMEPLAY, "Bug report", nullptr, 0, 0, 0, nullptr,
@@ -1991,12 +2016,7 @@ bool env_holds(const int* value) {
     return false;
 }
 Out player_custom_output{0, 0};   // (the player's own Output resolution size when HOS_OUTPUT_RES names another of its own)
-std::string ini_path() {
-    char exe[MAX_PATH];
-    const DWORD n = game_module_path(exe, MAX_PATH);
-    std::string dir(exe, n);
-    return dir.substr(0, dir.find_last_of("\\/") + 1) + "hookshot_options.ini";
-}
+std::string ini_path() { return options_path(); }   // (the user folder's when --user names one: vk_paths.h)
 const char* ini_key(const Row& r) {
     if (r.value == &opts.output_res) return "output_res";   // (host/nn_applet.c reads it at the start)
     if (r.value == &opts.vsync) return "vsync";
@@ -2129,30 +2149,19 @@ void save() {
             // (memory_budget and auto_for too: save() writes them, and the file's old line, kept after it, won at the next start;
             // auto_output, the Output resolution Auto once set, is no longer written: its old line is dropped)
             bool mine = key == "microphone_device" || key == "options_version" || key == "memory_budget" || key == "auto_for" ||
-                        key == "auto_tuned" || key == "auto_output" || key == "auto_steps";
+                        key == "auto_tuned" || key == "auto_output" || key == "auto_steps" ||
+                        key == "gpu_device_id";   // (the GPU device row's card: written below)
             // (and the Mesh shaders row's line, no longer read (gpu/vk/mesh_mode.h): dropped, not kept for nothing)
             mine |= key == "mesh_shaders";
+            // (and the VRAM budget row's, removed: one rule by the card, texture_budget.h and mirror_budget.h)
+            mine |= key == "vram_budget";
             for (const Row& r : rows)
                 if (!mine && r.value && key == ini_key(r)) mine = true;
             if (!mine) others += line, others += others.back() == '\n' ? "" : "\n";
         }
         fclose(f);
     }
-    // (written to a part file beside it, then moved over it in one step: a write that fails, on a full disk, leaves the options as
-    // they were, where "w" on the file itself emptied it first. A link's target is written, as fopen did; a link whose target
-    // cannot be named here, one to a file not made yet or any on Windows, is written through as before, so it stays a link)
-    std::string path = ini_path();
-    bool through = false;
-#ifdef _WIN32
-    const DWORD attrs = GetFileAttributesA(path.c_str());
-    through = attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_REPARSE_POINT);
-#else
-    struct stat st;
-    if (char* real = realpath(path.c_str(), nullptr)) path = real, free(real);
-    else through = lstat(path.c_str(), &st) == 0 && S_ISLNK(st.st_mode);
-#endif
-    const std::string part = through ? path : path + ".new";
-    if (FILE* f = fopen(part.c_str(), "w")) {
+    const auto write_lines = [&](FILE* f) {
         for (const Row& r : rows) {
             if (r.value == &opts.output_res) {   // (the size itself: host/nn_applet.c reads it)
                 const int v = saved_value(r.value);
@@ -2168,9 +2177,13 @@ void save() {
             }
         }
         if (!mic_want.empty()) fprintf(f, "microphone_device=%s\n", mic_want.c_str());   // (hookshot: also while it is unplugged)
-        // (not a row: the budgets Custom keeps. 0 too: with a preset on, the VRAM budget row chosen by the player, which the next
-        // start must not take back to the preset's)
+        // (not a row: the preset Custom came from, whose mip trimming it keeps: opts.budget)
         fprintf(f, "memory_budget=%d\n", opts.budget);
+        // (the GPU device row's card itself, not only its place in the list: gpu_choice.h. A saved card not here this run, the
+        // row still at the Auto it started on, stays saved for when it is back)
+        const std::string card = opts.gpu_device > 0 ? gpu_choice::card_id(gpu_device_cards, opts.gpu_device - 1)
+                                 : opts.gpu_device == 0 && gpu_card_missing ? gpu_saved_card : std::string();
+        if (!card.empty()) fprintf(f, "gpu_device_id=%s\n", card.c_str());
         if (auto_for) fprintf(f, "auto_for=%016llx\n", (unsigned long long)auto_for);   // (the hardware Auto (this PC) chose for)
         if (auto_tuned) fprintf(f, "auto_tuned=%016llx\n", (unsigned long long)auto_tuned);   // (and measured in play for)
         // (the tuning's steps so far and whether one went down: the no-seesaw rule and the two steps hold across restarts)
@@ -2192,20 +2205,89 @@ void save() {
             if (i < HOS_SW_N) fprintf(f, "toggle_%s=%d\n", bind_names[i], (opts.hold_toggle >> i) & 1);
             fprintf(f, "key_%s=%d,%d\n", bind_names[i], host->binding(HOS_BIND_KEY, i, 0), host->binding(HOS_BIND_KEY, i, 1));
         }
-        bool ok = !ferror(f);
-        ok = fclose(f) == 0 && ok;
+    };
+    // (written beside its target, a link followed so that a synced file stays linked, as <name>.new, and moved over it once
+    // whole: written in place, a full disk or a close mid-write left it cut short, and the next start took the defaults past
+    // the cut, or, cut to nothing, chose Auto (this PC) over the player's preset. Where nothing can be made beside it or moved
+    // over it (a folder that is not writable, the file held open by another program), in place as before. A read-only
+    // file is kept. Each failure is logged once a run, with the file's whole path (the launcher's user folder's, --user, or the
+    // game folder's: options_path): a save comes with every arrow press. No file this run (options_path empty, logged at the
+    // start by host/options_path.c): nothing saved, and nothing made in the folder the game runs in)
+    std::string path = ini_path();
+    if (path.empty()) return;
+    static bool told[5];
+    const auto say_once = [](int k, const std::string& what) {
+        if (!told[k]) told[k] = true, logf("menu: %s", what.c_str());
+    };
 #ifdef _WIN32
-        ok = ok && (through || MoveFileExA(part.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING));
+    const auto why = [] { return "Windows error " + std::to_string(GetLastError()); };
 #else
-        ok = ok && (through || rename(part.c_str(), path.c_str()) == 0);
+    const auto why = [] { return std::string(strerror(errno)); };
 #endif
-        if (!ok && through) {
-            logf("menu: hookshot_options.ini could not be written");
-        } else if (!ok) {
+    bool in_place = false;
+#ifdef _WIN32
+    const DWORD attrs = GetFileAttributesA(path.c_str());
+    if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_READONLY)) {
+        say_once(0, path + " is read-only: the settings are not saved");
+        return;
+    }
+    in_place = attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_REPARSE_POINT);   // (a link: written through it)
+#else
+    if (char* real = realpath(path.c_str(), nullptr)) path = real, free(real);
+    else {   // (a link to a file not made yet, whose target realpath cannot name: written through it, so it stays a link)
+        struct stat lst{};
+        in_place = lstat(path.c_str(), &lst) == 0 && S_ISLNK(lst.st_mode);
+    }
+    struct stat st{};
+    const bool exists = stat(path.c_str(), &st) == 0;
+    if (exists && access(path.c_str(), W_OK) != 0) {
+        const std::string e = why();   // (taken before the text is put together: that may touch errno)
+        say_once(0, path + " cannot be written (" + e + "): the settings are not saved");
+        return;
+    }
+#endif
+    const std::string part = path + ".new";
+    if (!in_place) {
+        FILE* f = fopen(part.c_str(), "w");
+        if (!f) {
+            const std::string e = why();
+            say_once(1, part + " cannot be made beside it (" + e + "): " + path + " is written in place");
+            in_place = true;
+        } else {
+#ifndef _WIN32
+            if (exists) (void)fchmod(fileno(f), st.st_mode & 07777);   // (its permissions, not the umask's)
+#endif
+            write_lines(f);
+            const bool whole = fflush(f) == 0 && !ferror(f);
+            std::string failed = whole ? std::string() : why();
+            if (fclose(f) != 0 && failed.empty()) failed = why();
+            if (!failed.empty()) {   // (not whole: the old file stays as it was)
+                remove(part.c_str());
+                say_once(2, part + " could not be written whole (" + failed + "): " + path + " is kept as it was");
+                return;
+            }
+#ifdef _WIN32
+            if (MoveFileExA(part.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING)) return;
+#else
+            if (rename(part.c_str(), path.c_str()) == 0) return;
+#endif
+            const std::string moved = why();
             remove(part.c_str());
-            logf("menu: hookshot_options.ini could not be written: the options are as they were");
+            say_once(3, part + " could not be moved over it (" + moved + "): " + path + " is written in place");
+            in_place = true;
         }
     }
+    FILE* f = fopen(path.c_str(), "w");
+    if (!f) {
+        const std::string e = why();
+        say_once(4, path + " could not be opened to write (" + e + "): the settings are not saved");
+        return;
+    }
+    write_lines(f);
+    const bool whole = fflush(f) == 0 && !ferror(f);
+    std::string failed = whole ? std::string() : why();
+    if (fclose(f) != 0 && failed.empty()) failed = why();
+    if (!failed.empty()) say_once(4, path + " could not be written in place (" + failed + ")");
 }
 
 /// (hookshot) The Button prompts row: a new face shows at once where the game has every part of the prompts from
@@ -2241,20 +2323,20 @@ void share_finish() {
     menu_refresh = true;
 }
 bool is_share_row(const Row& r) { return !r.value && r.tab == TAB_DEBUG && !strcmp(r.name, "Save my pipeline list"); }
-// (hookshot) Set up for a weak laptop (the Debug tab, integrated graphics: row_shown): Minimum's rows and memory budgets, then
+// (hookshot) Set up for a weak laptop (the Debug tab, integrated graphics: row_shown): Minimum's rows and mip trimming, then
 // lighter still. An i3-1115G4's UHD Graphics (2 cores, 4 threads, 16 GB shared) ran Kokiri Forest and the Deku Tree at 3-6 fps
 // with 120-200 ms of GPU time a frame on the game's own dynamic resolution, docked at 2048 x 1152
 bool laptop_applied = false;
 void weak_laptop_apply() {
-    apply_preset(1);   // (Minimum: its scaling rows, the handheld profile, its memory budgets)
+    apply_preset(1);   // (Minimum: its scaling rows, the handheld profile, its mip trimming on a small or shared GPU)
     env_release(&opts.dlss);
     opts.dlss = 0;   // (the game's own upscaler: no DLSS or FSR on these GPUs, and the lightest)
     opts.resolution = ur::snap_render(upscaler(), 6);   // (33%: auto_settings.h RES_ULTRA_PERFORMANCE)
     opts.upscale = 0, opts.sharpness = 0;   // (the plain window scale: as Auto's lightest tier, RX_VK_LOW_SPEC)
     for (int* v : {&opts.framegen, &opts.intel_compiles, &opts.intel_quick}) env_release(v);
     opts.framegen = 0;
-    opts.intel_compiles = 0, opts.intel_quick = 1;
-    opts.preset = 0;   // (Custom, Minimum's memory budgets kept: opts.budget)
+    opts.intel_compiles = 2, opts.intel_quick = 1;   // (2: one at a time, whatever the row's Auto is on this GPU)
+    opts.preset = 0;   // (Custom, Minimum's mip trimming kept: opts.budget)
     samplers_changed();   // (the upscalers' texture LOD bias follows the 3D's share)
     laptop_applied = true;
     menu_refresh = true;
@@ -2265,7 +2347,7 @@ void weak_laptop_apply() {
     }
     save();
     logf("menu: Set up for a weak laptop: Render resolution %d%%, the game's own upscaler, plain scale, handheld profile (after a "
-         "restart), Minimum's memory budgets", ur::percent(opts.resolution));
+         "restart), Minimum's mip trimming", ur::percent(opts.resolution));
 }
 std::string game_folder() {
     char exe[MAX_PATH];
@@ -2635,17 +2717,13 @@ void set_row(Row& r, int v, int dir, bool keep = true) {
     if (r.value == &opts.resolution) {
         int up = upscaler(), res = *r.value;
         ur::step_render(upscaler(), ur::snap_render(upscaler(), *r.value), dir, &up, &res);
-        if (up != upscaler()) opts.dlss = up;   // (Native in or out: DLAA / DLSS, FSR 4's native AA / FSR 4)
+        if (up != upscaler()) opts.dlss = up;   // (Native in or out: DLAA / DLSS, FSR 4's native AA / FSR 4, XeSS's / XeSS)
         v = ur::full_scale(up) ? *r.value : res;   // (Native changes the mode, not the saved numeric scale)
     }
     if (r.value == &opts.output_res) {   // (smallest to largest: step_output_choice)
         v = step_output_choice(*r.value, dir);
         if (v == *r.value) return;
     }
-    // (hookshot) the VRAM budget row steps past 2.2 GB: the Minimum (4GB) preset's, too few textures on a bigger card (a 12 GB
-    // card's walk made 2-3 times as many textures again as at Auto, 1% lows of 5-7 fps; hckrman101, #dev-work). The preset still
-    // sets it, and the row shows it then
-    if (r.value == &opts.vram_budget && v == kVramMinimumOnly) v += dir;
     if (stops_at_ends(r)) v = std::min(std::max(v, r.lo), r.hi);   // (a scale: it stops at its ends)
     if (r.value == &opts.pad_layout) {
         if (v > 2) v = dir > 0 ? 0 : 2;
@@ -2663,13 +2741,8 @@ void set_row(Row& r, int v, int dir, bool keep = true) {
             const int out = output_for_aspect(*r.value);
             if (out != opts.output_res) opts.output_res = out, env_release(&opts.output_res);
         }
-        if (r.value == &opts.vram_budget) {   // (hookshot: set on the row, the budget is the player's, on any card)
-            opts.budget = 0;
-            vram_budget_sync();
-        }
         if (!r.preset_exempt) {   // (rows no preset sets: the controls, the window, the counter...)
-            // (Custom, with the memory budgets of the preset it came from: they went with it, and Low (6GB) then a Resolution
-            // step left a 6 GB card without its texture cap, past its VRAM, and Streamline refused DLSS frames)
+            // (Custom, still the preset it came from in opts.budget: Minimum's mip trimming on a small card stays with it)
             opts.preset = 0; // Custom
         }
     }
@@ -2943,10 +3016,13 @@ char fps_sub[96] = "";   // (UTF-8: a translation's line can be three bytes a ch
 // (the FPS counter's levels past the number, written every half second by menu_tick: the frame time and its 1% low; the
 // Breakdown's parts, the GPU's time, the shaders built and draws left out over the graph's 4 s)
 char fps_ms_text[24] = "", fps_low_text[24] = "";
-double fps_ms_now = 0, fps_parts_now[fps_stats::kParts];   // (the frame time and the parts, for their colour and the bar)
+double fps_ms_now = 0;   // (the frame time, for its colour)
 double fps_rate_now = 0;   // (the number's rate, the game's own with frame generation: its colour)
 char fps_part_text[fps_stats::kParts][24];
 char fps_gpu_text[24] = "";
+char fps_rt_text[fps_stats::kRtParts][24];   // (the render thread's parts, fps_texts)
+char fps_gpu_busy_text[24] = "";              // (the GPU's share of the frame)
+bool fps_rt_on = false;                       // (a render thread was measured)
 char fps_built_text[16] = "", fps_left_text[16] = "";
 char fps_dev_text[fps_stats::kDevLines][32];   // (the Dev level's values, fps_texts)
 bool fps_vram_over = false;                    // (the VRAM line in red: past what the driver allows)
@@ -3392,7 +3468,7 @@ void draw_debug_rows(ui::Ctx& c, float cx0, float cx1, float top, float bottom, 
 // report_default has the Aspect ratio's, the Game language's and Frame generation by's.
 bool report_default_depends_on_pc(const Row& r) {
     if (r.value == &opts.sharpness || r.value == &opts.pace || r.value == &opts.realtime ||
-        r.value == &opts.handheld || r.value == &opts.vram_budget)
+        r.value == &opts.handheld)
         return opts.preset != 0 || auto_for != 0;
     return r.value == &opts.output_res || r.value == &opts.resolution || r.value == &opts.dlss ||
            r.value == &opts.preset || r.value == &opts.upscale ||
@@ -3452,8 +3528,7 @@ void bug_report_save() {
     in.version = HOOKSHOT_VERSION;
     in.gpu = device_report_text();
     in.options = changed_rows_text(in.pc_options);
-    const std::string ini = ini_path();
-    in.game_dir = ini.substr(0, ini.find_last_of("\\/") + 1);
+    in.game_dir = game_folder_path();   // (its logs/ and bug-reports/: vk_paths.h)
     in.log = [](const char* line) { logf("%s", line); };
     in.ask_picture = bug_report_picture;
     logf("menu: bug report asked for");
@@ -4274,14 +4349,46 @@ struct Tab {
     }
 };
 
+/// The processor's name without its marks, clock and core count: "Intel(R) Core(TM) i7-8700K CPU @ 3.70GHz" is "Intel Core
+/// i7-8700K", "AMD Ryzen 5 5600X 6-Core Processor" is "AMD Ryzen 5 5600X"
+static std::string hardware_cpu_name(std::string t) {
+    for (const char* mark : {"(R)", "(TM)", "(tm)"})
+        for (size_t at; (at = t.find(mark)) != std::string::npos;) t.erase(at, strlen(mark));
+    if (const size_t at = t.find(" @ "); at != std::string::npos) t.erase(at);
+    while (!t.empty() && t.back() == ' ') t.pop_back();
+    const auto drop_end = [&](const char* w) {
+        const size_t n = strlen(w);
+        if (t.size() > n && t.compare(t.size() - n, n, w) == 0) t.erase(t.size() - n);
+    };
+    drop_end(" Processor");
+    drop_end(" CPU");
+    if (const size_t sp = t.rfind(' '); sp != std::string::npos && t.size() > 5 && t.compare(t.size() - 5, 5, "-Core") == 0) t.erase(sp);
+    std::string out;
+    for (char ch : t)
+        if (ch != ' ' || (!out.empty() && out.back() != ' ')) out += ch;
+    while (!out.empty() && out.back() == ' ') out.pop_back();
+    return out;
+}
+
+/// The GPU's name without its marks and the driver's note in brackets at its end, which the driver line says:
+/// "AMD Radeon RX 6750 XT (RADV NAVI22)" is "AMD Radeon RX 6750 XT", "Intel(R) Arc(tm) A770 Graphics (DG2)" "Intel Arc A770 Graphics"
+static std::string hardware_gpu_name(std::string t) {
+    for (const char* mark : {"(R)", "(TM)", "(tm)"})
+        for (size_t at; (at = t.find(mark)) != std::string::npos;) t.erase(at, strlen(mark));
+    while (!t.empty() && t.back() == ' ') t.pop_back();
+    if (const size_t open = t.rfind(" ("); open != std::string::npos && open > 0 && !t.empty() && t.back() == ')') t.erase(open);
+    return t;
+}
+
 /// The FPS counter, in the corner the FPS counter position row chooses (the safe area's; under the banner at the top right
 /// while the menu is open, unless it fits beside the menu's column on a very wide window). The number as it always looked:
 /// green outlined bold, "FPS" small beside it, the frame generation line under them, no plate (#1957, v2.0.14's paint_fps).
 /// Past FPS (the row's levels, fps_stats.h), a tidy column under it, aligned to the same edge, with the same soft-shadowed
 /// text and no plate either: the frame time (green, amber or red against the cap's) and the 1% low; the graph of the last
 /// 4 s, a thin line over a soft fill, one column a frame span with its slowest frame (a stutter never falls between two), a
-/// faint dashed line at the cap's frame time, red ticks over frames past twice it; the Breakdown's bar of where the time
-/// goes, its legend with the values, the GPU's time and the stutters' causes (their columns get a red tick too).
+/// faint dashed line at the cap's frame time, red ticks over frames past twice it; the Breakdown, where the time goes
+/// stacked in the graph's columns, its legend with the values, the GPU's time and the stutters' causes (their columns get a
+/// red tick too). Dev adds the CPU, GPU and driver under the frame time, and the renderer's own numbers.
 void draw_fps(ui::Ctx& c, bool under_banner) {
     namespace fs = fps_stats;
     int level = fs::level_of(opts.show_fps);
@@ -4290,7 +4397,7 @@ void draw_fps(ui::Ctx& c, bool under_banner) {
     const Tab num(c.f.strong, big), tab(c.f.strong, small), lab(c.f.strong, label);
     const float nw = num.width(fps_text), lw = ui::size_of(c.f.strong, small, "FPS").x;
     const float sw = fps_sub[0] ? tab.width(fps_sub) : 0;
-    const float gw = 208 * s;   // (the column's width from the graph on)
+    const float gw = (fs::level_of(opts.show_fps) >= fs::kBreakdown ? 280 : 208) * s;   // (the column's width from the graph on; wider with the lanes)
     // (while the menu is open: the top right under the banner, the number and the frame time only, unless the window is so much
     // wider than 16:9 that the column fits beside the menu's, in its own corner)
     const bool beside = menu_ox >= (level >= fs::kGraph ? gw : nw + lw) + 2 * c.safe + 8 * s;
@@ -4301,8 +4408,10 @@ void draw_fps(ui::Ctx& c, bool under_banner) {
     const float row = 17 * s, gh = 50 * s, lh = 16 * s;
     float h = 32 * s + (fps_sub[0] ? row : 0);
     if (level >= fs::kFrameTime && fps_ms_text[0]) h += row;
+    if (level >= fs::kDev) h += 3 * lh;
     if (level >= fs::kGraph) h += 8 * s + gh + 4 * s;
-    if (level >= fs::kBreakdown) h += 10 * s + 6 * s + 4 * lh + 6 * s + 3 * lh;
+    const bool rt_lane = fps_render_thread_on();   // (no render thread, threaded rendering off: no lane, no legend section)
+    if (level >= fs::kBreakdown) h += (rt_lane ? 36 * s + 6 * lh : 0) + 10 * s + 10 * lh + 12 * s;   // (the render lane, the legend's rows)
     if (level >= fs::kDev) h += 6 * s + fs::kDevLines * lh;
     const float edge = left ? c.safe : c.w - c.safe;
     const float top = bottom ? c.h - c.safe - h : under_banner && !tune_mode && page != 5 && !beside ? banner_h(c) + 10 * s : c.safe;
@@ -4340,8 +4449,7 @@ void draw_fps(ui::Ctx& c, bool under_banner) {
     }
     float y = top + 32 * s;
     if (fps_sub[0]) tab.draw(c.d, at(sw), y, soft, fps_sub, s), y += row;
-    if (level < fs::kFrameTime) return;
-    if (fps_ms_text[0]) {   // ("16.7 ms" in the colour of its distance from the cap's frame time, "1% low 58" beside it)
+    if (level >= fs::kFrameTime && fps_ms_text[0]) {   // ("16.7 ms" coloured by its distance from the cap's frame time, "1% low 20.1 ms" beside it)
         const ImU32 ms_col = grade_col[fps_ms_now > 0 ? fs::rate_grade(1000.0 / fps_ms_now, target) : 0];
         const float mw = tab.width(fps_ms_text), gap = 10 * s, low_w = tab.width(fps_low_text);
         const float x = at(mw + gap + low_w);
@@ -4349,23 +4457,46 @@ void draw_fps(ui::Ctx& c, bool under_banner) {
         tab.draw(c.d, x + mw + gap, y, soft, fps_low_text, s);
         y += row;
     }
+    if (level >= fs::kDev) {   // (Dev: the CPU, the GPU, its driver. A line too long for the column's width loses its end)
+        static std::string cpu, gpu, drv, fit[3];
+        static float fit_w = 0;
+        if (gpu.empty()) cpu = hardware_cpu_name(bug_report::cpu_name()), gpu = hardware_gpu_name(device_name_text()), drv = driver_text(), fit_w = 0;
+        if (fit_w != gw) {
+            fit_w = gw;
+            const auto shorten = [&](std::string t, float room) {
+                if (lab.width(t.c_str()) <= room) return t;
+                while (!t.empty() && lab.width((t + "...").c_str()) > room) {
+                    t.pop_back();
+                    while (!t.empty() && ((unsigned char)t.back() & 0xC0) == 0x80) t.pop_back();
+                }
+                while (!t.empty() && t.back() == ' ') t.pop_back();
+                return t + "...";
+            };
+            fit[0] = shorten(cpu.empty() ? "-" : cpu, gw);
+            fit[1] = shorten(gpu.empty() ? "-" : gpu, gw);
+            fit[2] = shorten(drv.empty() ? "-" : drv, gw);
+        }
+        for (const std::string& t : fit) lab.draw(c.d, at(lab.width(t.c_str())), y + 1 * s, soft, t.c_str(), s), y += lh;
+    }
     if (level < fs::kGraph) return;
     // (the graph)
-    constexpr int kCols = 104;
+    constexpr int kCols = 64;   // (wider columns, the lanes' parts readable)
     static fs::Frame col[kCols];
     static bool mark[kCols];
     // (the columns from the ring at most 60 times a second: at the cap Uncapped's 1000 fps, 4 s of frames each present cost
     // more than the drawing; a 4 s graph moves a column every 40 ms)
-    static double topms = 0;
+    static double topms = 0, scroll = 0;
     static int64_t graph_at = 0;
     if (const int64_t now = fps_clock(); now - graph_at >= fs::kSecond / 60 || now < graph_at) {
         graph_at = now;
-        (void)fps_graph(now, kCols, col, mark);
+        (void)fps_graph(now, kCols, col, mark, &scroll);   // (fixed slots, scrolled by how far into the newest one now is)
         static float ms[kCols];   // (the scale from the usual frame, not the slowest: a spike past the top is drawn at it, and marked)
         int k = 0;
         for (int i = 0; i < kCols; i++)
             if (col[i].ms > 0) ms[k++] = col[i].ms;
-        topms = fs::graph_top(target, fs::typical_ms(ms, k));
+        // (up at once, down slowly, so the whole graph does not rescale with each frame that scrolls out)
+        const double want = fs::graph_top(target, fs::typical_ms(ms, k));
+        topms = want >= topms ? want : std::max(want, topms * 0.995);
     }
     const bool parts = level >= fs::kBreakdown;
     const float x0 = at(gw), x1 = x0 + gw, gy0 = y + 8 * s, gy1 = gy0 + gh;
@@ -4388,14 +4519,41 @@ void draw_fps(ui::Ctx& c, bool under_banner) {
         lab.draw(c.d, left ? x1 + 5 * s : x0 - 5 * s - lab.width(t), gy0 - label * 0.55f, ui::rgba(200, 200, 200), t, s);
     }
     // (the soft fill: a column each, fading down; then the line over it, broken where a column had no frame, a faint dark line
-    // under it for the bright scenes)
+    // under it for the bright scenes. with the Breakdown, each column its frame's parts stacked instead of the fill, and
+    // with a render thread a lane under the graph on the same time axis, the render thread's frame)
     static ImVec2 pts[kCols];
     const auto yv = [&](float ms) { return std::max(gy0, gy1 - ms * py); };
+    const auto cx_of = [&](int i) { return x0 + (i + 0.5f - (float)scroll) * cw; };   // (scrolled smoothly)
+    // (the parts' colours, one meaning in every lane: blue the game's work, red the waits for the GPU, purple the render thread,
+    // grey the pacing and idle; the lighter shade of a family its smaller part)
+    static const ImU32 part_col[fs::kParts] = {ui::rgba(96, 160, 232), ui::rgba(160, 200, 245), ui::rgba(246, 150, 130),
+                                                ui::rgba(120, 120, 120), ui::rgba(168, 132, 230), ui::rgba(232, 72, 60)};
+    static const char* const names[fs::kParts] = {"Game", "Renderer", "GPU present", "Pacing", "Render thread", "GPU fence"};
+    static const bool part_waits[fs::kParts] = {false, false, true, false, true, true};   // (under the legend's "Waiting on")
+    static const int order[fs::kParts] = {fs::kGame, fs::kRender, fs::kWaitRender, fs::kWaitGpu, fs::kGpuWait, fs::kPace};
+    static const ImU32 rt_col[fs::kRtParts] = {ui::rgba(168, 132, 230), ui::rgba(210, 190, 245), ui::rgba(232, 72, 60),
+                                                ui::rgba(110, 110, 110)};
+    static const char* const rt_names[fs::kRtParts] = {"Recording", "Workers", "GPU slot", "Idle"};
+    const auto alpha = [](ImU32 c, int a) { return (c & 0x00FFFFFF) | ((ImU32)a << 24); };
+    c.d->PushClipRect(ImVec2(x0, gy0 - 8 * s), ImVec2(x1, gy1 + 1), true);
+    if (parts)
+        for (int i = 0; i < kCols; i++) {
+            if (col[i].ms <= 0) continue;
+            const float l = cx_of(i) - cw * 0.5f + 0.5f, r = l + cw - 0.5f;   // (a hairline between columns)
+            float yb = gy1;
+            for (int o = 0; o < fs::kParts && yb > gy0; o++) {
+                const float hgt = col[i].part[order[o]] * py;
+                if (hgt <= 0) continue;
+                const float yt = std::max(gy0, yb - hgt);
+                c.d->AddRectFilled(ImVec2(l, yt), ImVec2(r, yb), alpha(part_col[order[o]], 190));
+                yb = yt;
+            }
+        }
     // (the columns with a frame, joined across those without: a slow stretch has fewer frames than columns)
     int n = 0;
     for (int i = 0; i < kCols; i++)
-        if (col[i].ms > 0) pts[n++] = ImVec2(x0 + (i + 0.5f) * cw, yv(col[i].ms));
-    if (n >= 2) {   // (the fill: a quad under each segment, its colour at the line fading to nothing at the floor)
+        if (col[i].ms > 0) pts[n++] = ImVec2(cx_of(i), yv(col[i].ms));
+    if (n >= 2 && !parts) {   // (the fill: a quad under each segment, its colour at the line fading to nothing at the floor)
         const ImVec2 uv = ImGui::GetFontTexUvWhitePixel();
         c.d->PrimReserve((n - 1) * 6, (n - 1) * 4);
         for (int k = 0; k + 1 < n; k++) {
@@ -4426,57 +4584,110 @@ void draw_fps(ui::Ctx& c, bool under_banner) {
     }
     for (int i = 0; i < kCols; i++)
         if ((col[i].ms > 2 * target && col[i].ms > 1.5f * usual) || col[i].ms > topms || (parts && mark[i])) {   // (no target: past half again the usual)
-            const float cx = x0 + (i + 0.5f) * cw;
+            const float cx = cx_of(i);
             c.d->AddCircleFilled(ImVec2(cx, gy0 - 3 * s), 2.2f * s, ui::rgba(0, 0, 0, 120));
             c.d->AddCircleFilled(ImVec2(cx, gy0 - 3 * s), 1.6f * s, ui::rgba(240, 100, 85));
         }
+    c.d->PopClipRect();
     if (!parts) return;
-    // (the Breakdown: where the half second's frame time went, as a bar, then a legend with the values, then the rest)
-    static const ImU32 part_col[fs::kParts] = {ui::rgba(110, 170, 230), ui::rgba(180, 140, 225), ui::rgba(226, 160, 80),
-                                                ui::rgba(130, 128, 118)};
-    static const char* const names[fs::kParts] = {"Game", "Renderer", "GPU wait", "Pacing"};
-    float by = gy1 + 10 * s;
-    {
-        const float bh = 6 * s, r = 3 * s;
-        double sum = 0;
-        for (double v : fps_parts_now) sum += v;
-        c.d->AddRectFilled(ImVec2(x0 - 1, by - 1), ImVec2(x1 + 1, by + bh + 1), ui::rgba(0, 0, 0, 90), r);
-        float x = x0;
-        for (int p = 0; p < fs::kParts && sum > 0; p++) {
-            const float w = (float)(gw * fps_parts_now[p] / sum);
-            if (w <= 0) continue;
-            const ImDrawFlags round = (x <= x0 + 0.5f ? ImDrawFlags_RoundCornersLeft : 0) |
-                                      (x + w >= x1 - 0.5f ? ImDrawFlags_RoundCornersRight : 0);
-            c.d->AddRectFilled(ImVec2(x, by), ImVec2(std::min(x + w, x1), by + bh), part_col[p], round ? r : 0, round ? round : ImDrawFlags_RoundCornersNone);
-            x += w;
+    // (hookshot) the render thread's lane: its frame in ms on the frame graph's scale (its own height), the work and the waits
+    // stacked and idle left empty, so a column's height is what the render thread spent of the frame; the cap's line and the
+    // top's value beside it, as the frame graph's
+    const float lane_gap = 6 * s, rh = rt_lane ? 30 * s : 0;
+    const float ry0 = gy1 + (rt_lane ? lane_gap : 0), ry1 = ry0 + rh, rpy = (float)(rh / topms);
+    if (rt_lane) {
+        const auto scale_label = [&](const char* t, float ty, ImU32 col_) {
+            lab.draw(c.d, left ? x1 + 5 * s : x0 - 5 * s - lab.width(t), ty - label * 0.55f, col_, t, s);
+        };
+        c.d->AddLine(ImVec2(x0, std::floor(ry1) + 0.5f), ImVec2(x1, std::floor(ry1) + 0.5f), ui::rgba(255, 255, 255, 60), std::max(1.0f, s));
+        {
+            char t[16];
+            if (target > 0) {
+                const float ty = std::floor(ry1 - (float)target * rpy) + 0.5f, dash = 4 * s, gap = 3 * s;
+                for (float x = x0; x < x1; x += dash + gap)
+                    c.d->AddLine(ImVec2(x, ty), ImVec2(std::min(x + dash, x1), ty), ui::rgba(255, 255, 255, 110), std::max(1.0f, s));
+                snprintf(t, sizeof t, "%.1f", target);
+                scale_label(t, ty, ui::rgba(235, 235, 235));
+            }
+            snprintf(t, sizeof t, topms < 10 ? "%.1f" : "%.0f", topms);
+            scale_label(t, ry0, ui::rgba(200, 200, 200));
         }
-        by += bh + 6 * s;
+        c.d->PushClipRect(ImVec2(x0, ry0), ImVec2(x1, ry1 + 1), true);
+        for (int i = 0; i < kCols && fps_rt_on; i++) {
+            if (col[i].ms <= 0) continue;
+            const float l = cx_of(i) - cw * 0.5f + 0.5f, r = l + cw - 0.5f;
+            float yb = ry1;
+            for (int k = 0; k < fs::kRtParts && yb > ry0; k++) {
+                if (k == fs::kRtIdle) continue;   // (idle: the space above)
+                const float hgt = col[i].rt[k] * rpy;
+                if (hgt <= 0) continue;
+                const float yt = std::max(ry0, yb - hgt);
+                c.d->AddRectFilled(ImVec2(l, yt), ImVec2(r, yb), alpha(rt_col[k], 190));
+                yb = yt;
+            }
+        }
+        c.d->PopClipRect();
     }
-    const auto line = [&](ImU32 dot, const char* name, const char* value, ImU32 value_col) {
-        float nx = x0;
-        if (dot) {
-            c.d->AddCircleFilled(ImVec2(x0 + 4 * s, by + lh * 0.5f), 3.2f * s, ui::rgba(0, 0, 0, 110));
-            c.d->AddCircleFilled(ImVec2(x0 + 4 * s, by + lh * 0.5f), 2.6f * s, dot);
-            nx += 12 * s;
-        }
+    // (the legend: the frame's parts first, adding up to the frame time shown under the number, then the render thread's to the same
+    // span on its own clock, the GPU's beside them; the render thread and the GPU run in parallel with the frame, not after it.
+    // The waits under a "Waiting on" sub-heading of their own, which has no value)
+    float by = ry1 + 10 * s;
+    const float half_w = gw * 0.5f;
+    const auto swatch = [&](float sx, ImU32 col) {
+        c.d->AddRectFilled(ImVec2(sx, by + lh * 0.5f - 3 * s), ImVec2(sx + 6 * s, by + lh * 0.5f + 3 * s), col, 1.5f * s);
+    };
+    const auto cell = [&](int column, ImU32 dot, bool indent, const char* name, const char* value, ImU32 value_col) {
+        const float cx0 = column < 0 ? x0 : x0 + column * half_w, cx1 = column < 0 ? x1 : cx0 + half_w - (column ? 0 : 8 * s);   // (-1: the whole width)
+        float nx = cx0 + (indent ? 10 * s : 0);   // (indent: a part under "Waiting on")
+        if (dot) swatch(nx, dot), nx += 10 * s;
         lab.draw(c.d, nx, by + 1 * s, soft, name, s);
-        tab.draw(c.d, x1 - tab.width(value), by, value_col, value, s);
+        tab.draw(c.d, cx1 - tab.width(value), by, value_col, value, s);
+    };
+    const auto header = [&](const char* t, const char* value, ImU32 value_col) {
+        lab.draw(c.d, x0, by + 1 * s, ui::rgba(255, 255, 255, 200), t, s);
+        if (value) tab.draw(c.d, x1 - tab.width(value), by, value_col, value, s);
         by += lh;
     };
-    for (int p = 0; p < fs::kParts; p++) line(part_col[p], names[p], fps_part_text[p], ink);
+    // (a sub-heading over the waits, without a value of its own: the values in the column are the parts, and they add up)
+    const auto waiting_on = [&] {
+        lab.draw(c.d, x0, by + 1 * s, soft, "Waiting on", s);
+        by += lh;
+    };
+    for (int o = 0; o < fs::kParts; o++) {   // (the work first, then the waits under their sub-heading, then the pacing)
+        if (part_waits[order[o]] && (o == 0 || !part_waits[order[o - 1]])) waiting_on();
+        cell(-1, part_col[order[o]], part_waits[order[o]], names[order[o]], fps_part_text[order[o]], ink);
+        by += lh;
+    }
+    if (rt_lane) {
+        header("Render thread", "in parallel", dim);
+        for (int k = 0; k < fs::kRtParts; k++) {
+            const bool waits = k == fs::kRtWorkers || k == fs::kRtGpu;
+            if (k == fs::kRtWorkers) waiting_on();
+            cell(-1, rt_col[k], waits, rt_names[k], fps_rt_text[k], ink);
+            by += lh;
+        }
+    }
+    header("GPU", "in parallel", dim);
+    {
+        char busy[48];
+        snprintf(busy, sizeof busy, "%s  %s", fps_gpu_text, fps_gpu_busy_text);
+        cell(-1, 0, false, "GPU time", busy, ink);
+        by += lh;
+    }
     c.d->AddLine(ImVec2(x0, std::floor(by + 3 * s) + 0.5f), ImVec2(x1, std::floor(by + 3 * s) + 0.5f), ui::rgba(255, 255, 255, 40), std::max(1.0f, s));
     by += 6 * s;
-    line(0, "GPU time", fps_gpu_text, ink);
     const ImU32 red = ui::rgba(240, 100, 85);
-    line(0, "Shaders built (4 s)", fps_built_text, strcmp(fps_built_text, "0") ? red : dim);
-    line(0, "Draws left out (4 s)", fps_left_text, strcmp(fps_left_text, "0") ? red : dim);
+    cell(0, 0, false, "Shaders built (4 s)", fps_built_text, strcmp(fps_built_text, "0") ? red : dim);
+    cell(1, 0, false, "Draws left out (4 s)", fps_left_text, strcmp(fps_left_text, "0") ? red : dim);
+    by += lh;
     if (level < fs::kDev) return;
     // (Dev: the renderer's own numbers, for debugging)
     c.d->AddLine(ImVec2(x0, std::floor(by + 3 * s) + 0.5f), ImVec2(x1, std::floor(by + 3 * s) + 0.5f), ui::rgba(255, 255, 255, 40), std::max(1.0f, s));
     by += 6 * s;
     for (int i = 0; i < fs::kDevLines; i++) {
         const bool alarm = (i == fs::kVram && fps_vram_over) || (i == fs::kSkipped && strcmp(fps_dev_text[i], "0") && strcmp(fps_dev_text[i], "-"));
-        line(0, fs::dev_name(i), fps_dev_text[i], alarm ? red : ink);
+        cell(-1, 0, false, fs::dev_name(i), fps_dev_text[i], alarm ? red : ink);
+        by += lh;
     }
 }
 
@@ -4541,7 +4752,7 @@ void draw_startup(ui::Ctx& c) {
 void startup_fade_to(float f) { startup_fade.store(f, std::memory_order_relaxed); }
 
 // (hookshot, #1886) The Upscaler row's one-time questions: NVIDIA's NGX started (dlss_probe), AMD's FSR 4 loaded
-// (fsr4_probe), FSR 3.1's GPU check. They were asked at the menu's first open, on the frame's thread, and NGX's start
+// (fsr4_probe), Intel's XeSS context made once (xess_probe), FSR 3.1's GPU check. They were asked at the menu's first open, on the frame's thread, and NGX's start
 // alone held that frame about 3 s (an RTX 5080 at 4K; 2.9 s here): the game stood still and its sound ran on, out of
 // step with a cutscene. Now asked once on a thread of their own while the start-up screen shows, where nobody waits on
 // them; each is locked and asked once (ngx_init, fsr4's load, fsr3::supported's static), so the menu's own calls at its
@@ -4554,6 +4765,7 @@ static void probe_upscalers_soon() {
             const auto t0 = std::chrono::steady_clock::now();
             dlss_probe();
             fsr4_probe();
+            xess_probe();
             (void)fsr3::supported();
             logf("menu: the upscalers asked in the background while the start-up screen shows (%.0f ms)",
                  std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
@@ -4585,7 +4797,6 @@ void menu_init() {
     for (auto& count : item_counts) count.store(-1, std::memory_order_relaxed);
     bool has_options = false;
     bool has_output = false;   // (an output_res= line: the Output resolution chosen; none: hos_output_default, as the host)
-    bool has_vram_budget = false;   // (hookshot: a file from before the VRAM budget row: its preset's, memory_budget's)
     bool has_memory_budget = false;   // (a file from before memory_budget: its preset's)
     const char* cheats = getenv("HOS_OOT_CHEATS");
     cheats_env = cheats && !strcmp(cheats, "1");
@@ -4625,6 +4836,7 @@ void menu_init() {
             if (!strcmp(line, "dynamic_resolution")) old_dynres = atoi(eq + 1);
             if (!strcmp(line, "menu_size") && atoi(eq + 1) == 0) menu_auto = true;
             if (!strcmp(line, "auto_for")) auto_for = strtoull(eq + 1, nullptr, 16);
+            if (!strcmp(line, "gpu_device_id")) gpu_saved_card.assign(eq + 1, strcspn(eq + 1, " \t\r\n"));   // (menu_set_gpu_count)
             if (!strcmp(line, "auto_tuned")) auto_tuned = strtoull(eq + 1, nullptr, 16);
             if (!strcmp(line, "auto_steps")) {
                 int steps = 0, down = 0;
@@ -4632,7 +4844,6 @@ void menu_init() {
                     auto_tuning.steps = std::max(steps, 0), auto_tuning.went_down = down != 0;
             }
             if (!strcmp(line, "memory_budget")) opts.budget = std::min(std::max(atoi(eq + 1), 0), 5), has_memory_budget = true;
-            has_vram_budget |= !strcmp(line, "vram_budget");
             if (!strcmp(line, "microphone_device")) {   // (hookshot: the microphone, by its name)
                 mic_want = mic_key(eq + 1);
             }
@@ -4690,8 +4901,6 @@ void menu_init() {
     }
     if (opts.preset > 0 && !has_memory_budget) opts.budget = opts.preset;   // (a file from before memory_budget: its preset's)
     if (opts.preset == kAutoPreset && !has_memory_budget) opts.budget = 0;   // (Auto: its tier's, menu_auto_for_gpu)
-    if (!has_vram_budget) opts.vram_budget = preset_vram_budget(opts.budget);   // (a file from before the row)
-    vram_budget_sync();
     menu_debug_rows(opts.descriptor_reuse, opts.sampler_cache);   // (the Debug rows that apply in play: what was loaded)
     fps_level_now.store(fps_stats::level_of(opts.show_fps), std::memory_order_relaxed);
     output_field_show();   // (hookshot: Custom output size, the size of the player's own, as the file has it)
@@ -4706,7 +4915,7 @@ void menu_init() {
     if (const char* e = getenv("HOS_SKIP_OPENING")) env_override(&opts.skip_opening, !env_value_off(e));
     // (vk_texture.cpp reads RX_VK_ASTC_RGBA8 over the row: the row shows it, fixed (row_fixed), and the ini keeps the player's)
     if (const char* e = getenv("RX_VK_ASTC_RGBA8")) env_override(&opts.astc_rgba8, !env_value_off(e));
-    if (const char* e = getenv("RX_VK_NO_INTEL_SERIAL")) env_override(&opts.intel_compiles, !env_value_off(e));
+    if (const char* e = getenv("RX_VK_NO_INTEL_SERIAL")) env_override(&opts.intel_compiles, env_value_off(e) ? 2 : 1);
     if (const char* e = getenv("RX_VK_COMPUTE_QUICK_FIRST")) env_override(&opts.intel_quick, !env_value_off(e));
     if (const char* e = getenv("HOS_OUTPUT_RES")) {
         player_custom_output = custom_output;   // (parse_output replaces the player's own size with the environment's)
@@ -4720,8 +4929,8 @@ void menu_init() {
 /// picks from the hardware. A first start (no options file yet) starts on it. With Auto on, the profile is applied when the
 /// hardware it was chosen for changes (another card, its memory, the screen's size, a build with or without DLSS or FSR 4):
 /// the fingerprint is kept in the options file (auto_for=). Changing a row yourself comes back to Custom, and then nothing here
-/// touches the settings; the rows no preset sets (the Output resolution, the VRAM budget) leave it on Auto, Auto never sets
-/// the Output resolution, and the VRAM budget the player set is kept when Auto chooses again (apply_auto keep_own). Before Auto,
+/// touches the settings; the rows no preset sets (the Output resolution) leave it on Auto, and Auto never sets the Output
+/// resolution. The VRAM budgets are no preset's: one rule by the card (texture_budget.h, mirror_budget.h). Before Auto,
 /// a first start chose Minimum or Low by the card's memory alone: an older or smaller card no longer starts with the full-size
 /// budget (a GTX 1050 lost the device at the first scene that way,
 /// Discord 2026-11-10). RX_VK_AUTO_PRESET=0: a first start keeps the defaults, as before Auto.
@@ -4742,11 +4951,14 @@ void menu_auto_for_gpu(const VkPhysicalDeviceProperties& props, ::auto_settings:
         logf("vk: Auto (this PC) would be: %s (%s)", auto_choice.why, hw_line);   // (for a bug report: what Auto would choose)
         return;
     }
+    // (an options file from the VRAM budget row, set under Auto: memory_budget=0, the preset Auto's tier is again, for Minimum's
+    // mip trimming: low_vram_texture_mips)
+    if (opts.budget == 0) opts.budget = auto_choice.tier;
     if (fp == auto_for) {
         logf("vk: Auto (this PC): the settings chosen for this PC before (%s)", hw_line);
         return;
     }
-    apply_auto(!first);   // (the hardware changed: the VRAM budget the player set stays theirs)
+    apply_auto();   // (the hardware changed)
     // (a row that takes a restart Auto sets, the Profile (docked), applies at the next start, a first start's too: host/hos_main.c
     // read it at boot, before the device, and this run keeps what menu_init recorded. It is Auto's, not the player's: closing the
     // menu does not ask to restart for it, as after Later. The row still says After restart, and a change of the player's own to
@@ -4803,7 +5015,9 @@ bool menu_threaded_rendering() {
     }();
     return on;
 }
-bool intel_compiles_side_by_side() { return opts.intel_compiles != 0; }   // (RX_VK_NO_INTEL_SERIAL in it: menu_init)
+bool intel_compiles_side_by_side() {   // (RX_VK_NO_INTEL_SERIAL in the row: menu_init. Asked once the device is made)
+    return intel_side_by_side_chosen(opts.intel_compiles, dev.props.deviceID, dev.props.driverVersion);
+}
 // (Intel's Windows driver only, where the row shows: Mesa's ANV ignores DISABLE_OPTIMIZATION, same instructions, spills and
 // compile time on an Iris Xe, its slow part register allocation at SIMD32)
 bool intel_quick_compute() { return opts.intel_quick != 0 && intel_compiler_row(); }   // (RX_VK_COMPUTE_QUICK_FIRST in it: menu_init)
@@ -4813,7 +5027,20 @@ int resolution_scale() {
     return s > 0 ? (int)(twelfths(s) * 10000.0f / 12.0f + 0.5f) : 0;   // (the twelfth game_size labels)
 }
 
+/// The usable GPUs counted (vk_main.cpp pick_device, gpu_device_cards filled): the row offers them, and a card the options file
+/// saved (gpu_device_id=) is found where it is in this run's list, whatever its place was (gpu_choice.h). One not here (taken
+/// out, an eGPU unplugged) is Auto for the run, and stays saved (save) until the row is changed. A file from before the card
+/// was saved keeps its place (gpu_device=), and saves the card at its next save
 void menu_set_gpu_count(int count) {
+    if (!gpu_saved_card.empty()) {
+        const int at = gpu_choice::menu_of_card(gpu_device_cards, gpu_saved_card);
+        gpu_card_missing = at == 0;
+        if (at > 0 && at != opts.gpu_device)
+            logf("vk: GPU device: the saved card (%s) is %d: %s now, not %d", gpu_saved_card.c_str(), at - 1,
+                 gpu_device_names[at - 1].c_str(), opts.gpu_device - 1);
+        else if (!at) logf("vk: GPU device: the saved card (%s) is not here: Auto for this run, kept for when it is back", gpu_saved_card.c_str());
+        opts.gpu_device = at;
+    }
     for (Row& r : rows) {
         if (r.value == &opts.gpu_device) {
             r.hi = count;
@@ -4882,10 +5109,12 @@ void fps_texts(int64_t now) {
     fs::low_text(fps_low_text, sizeof fps_low_text, half.low_fps);
     if (!half.frames) fps_ms_text[0] = 0;
     fps_ms_now = half.avg_ms;
-    for (int p = 0; p < fs::kParts; p++) fps_parts_now[p] = half.part[p];
     if (level < fs::kBreakdown) return;
     for (int p = 0; p < fs::kParts; p++) fs::frame_time_text(fps_part_text[p], sizeof fps_part_text[p], half.part[p]);
     fs::frame_time_text(fps_gpu_text, sizeof fps_gpu_text, half.gpu_ms);
+    for (int k = 0; k < fs::kRtParts; k++) fs::frame_time_text(fps_rt_text[k], sizeof fps_rt_text[k], half.rt[k]);
+    fps_rt_on = half.rt[fs::kRtWork] + half.rt[fs::kRtWorkers] + half.rt[fs::kRtGpu] + half.rt[fs::kRtIdle] > 0;
+    snprintf(fps_gpu_busy_text, sizeof fps_gpu_busy_text, "%.0f%%", half.avg_ms > 0 ? std::min(100.0, 100.0 * half.gpu_ms / half.avg_ms) : 0.0);
     const fs::Summary graph = fps_summary(now, fs::kGraphWindow, 0);
     snprintf(fps_built_text, sizeof fps_built_text, "%d", graph.pipelines);
     snprintf(fps_left_text, sizeof fps_left_text, "%d", graph.left_out);
@@ -5039,7 +5268,8 @@ void menu_auto_tune(double gpu_ms, double draws, double fps) {
             samplers_changed();
             menu_refresh = true;
             tuning.n = 0;   // (the windows gathered were at the other share)
-            static const char* const name[ur::kUpscalers] = {"the game's own", "DLSS", "DLAA", "FSR 3.1", "FSR 4", "FSR 4", "Off"};
+            static const char* const name[ur::kUpscalers] = {"the game's own", "DLSS", "DLAA", "FSR 3.1", "FSR 4", "FSR 4", "Off",
+                                                             "XeSS", "XeSS"};
             logf("vk: Auto (this PC): %s runs, not the %s chosen: Render resolution %d%% -> %d%%",
                  name[std::clamp(u, 0, ur::kUpscalers - 1)], name[std::clamp(c.upscaler, 0, ur::kUpscalers - 1)], ur::percent(v),
                  ur::percent(opts.resolution));
@@ -5468,7 +5698,7 @@ void menu_tick() {
         // (the layout row shows the controls as they are: host/nn_hid.c keeps them, the ini's pad_ lines, and a saved
         // layout is not applied over them at start)
         if (open_now.load()) opts.pad_layout = detect_pad_layout();
-        if (open_now.load()) dlss_probe(), fsr4_probe();   // (whether the Upscaler row can offer DLSS and FSR here: asked once)
+        if (open_now.load()) dlss_probe(), fsr4_probe(), xess_probe();   // (whether the Upscaler row can offer DLSS, FSR and XeSS: asked once)
         if (open_now.load()) refresh_mics();   // (the microphones as they are now)
     }
     if (open_now.load() && editing) {   // (hookshot) a text field has the keyboard: the keys type into it (text_edit), nothing else

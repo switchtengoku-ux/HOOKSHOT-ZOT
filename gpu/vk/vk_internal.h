@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <array>
 #include <atomic>
 #include <mutex>
@@ -14,6 +15,7 @@
 #include "compat/hookshot_env.h"
 #endif
 #include "vk_vendor.h"
+#include "gpu_choice.h"
 
 #if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
 #include <intrin.h>
@@ -30,6 +32,7 @@ typedef struct VmaAllocation_T* VmaAllocation;   // (vk_mem_alloc.h's handle)
 namespace mkwvk {
 
 extern std::vector<std::string> gpu_device_names;
+extern std::vector<gpu_choice::Card> gpu_device_cards;   // (the same GPUs' models, for the row's saved card: gpu_choice.h)
 extern const MkwVkHost* host;
 void logf(const char* fmt, ...);
 // (hookshot) A line at another level than info, as host/hos.h's hos_log_at: "[trace] " leads its text, after the host's thread tag
@@ -123,8 +126,9 @@ extern Device dev;
 /// A750 froze the PC on four compute pipelines (issue 496). An Intel UHD on Windows read address 0x170 inside igvk64
 /// during the first scene's compiles (two frames in hookshot_vk.dll, and no "driver faulted compiling" line, so the
 /// call was not inside guarded_graphics). One thread enters vkCreateShaderModule and vkCreate*Pipelines.
-/// Other vendors, and Intel on other systems, are not held. The Intel shader compiles row's Side by side, or
-/// RX_VK_NO_INTEL_SERIAL=1 over it: side by side, as before.
+/// Other vendors, and Intel on other systems, are not held. The Intel shader compiles row's Side by side, its Auto on
+/// the Arc B-series (intel_compiles.h: where side by side was measured), or RX_VK_NO_INTEL_SERIAL=1 over it: side by
+/// side, as before.
 /// ask: a create that compiles nothing (VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT), on the replay thread so a
 /// draw or dispatch never waits for a compile. It never waits here either: while a worker holds the gate, busy is set and
 /// the caller answers VK_PIPELINE_COMPILE_REQUIRED (cold) without asking the driver.
@@ -132,7 +136,12 @@ bool intel_compiles_side_by_side();   // (vk_menu.cpp: the row as this run start
 bool intel_quick_compute();   // (vk_menu.cpp: the Intel quick compute builds row, as it is now: vk_draw.cpp compute_optimize)
 inline bool intel_gate_on() {
 #ifdef _WIN32
-    static const bool on = !intel_compiles_side_by_side() && dev.props.vendorID == 0x8086;
+    static const bool on = [] {
+        if (dev.props.vendorID == 0x8086 && intel_compiles_side_by_side())   // (said once: which it is shows in every log)
+            logf("vk: Intel's compiler is entered side by side (Intel shader compiles row: Side by side, its Auto on the Arc "
+                 "B-series, or RX_VK_NO_INTEL_SERIAL=1)");
+        return !intel_compiles_side_by_side() && dev.props.vendorID == 0x8086;
+    }();
     return on;
 #else
     return false;
@@ -253,6 +262,8 @@ void memory_pool_created(uint64_t gpu, uint64_t size);
 /// Whether guest memory in [lo, hi) is in an imported pool, live or retired (the GPU may read or write it)
 int memory_guest_imported(uint64_t lo, uint64_t hi);
 int memory_guest_contained(uint64_t lo, uint64_t hi);   // (whether one imported pool holds all of [lo, hi): vk_texture.cpp upload_unswizzle_gpu)
+/// (hookshot) The game freed the address region [lo, hi): what no import holds of it is decommitted (vk_memory.cpp)
+void memory_guest_release(uint64_t lo, uint64_t hi);
 void memory_stats(int64_t* mirrors, uint64_t* mirror_mb, int64_t* sync_bytes, int64_t* sync_copies, int64_t* wb_bytes);
 // Page write generations (vk_memory.cpp, after totk-pc-recomp's vk_memory.c): at each submit the guest pages the CPU
 // wrote since the last one (the soft write watch) are stamped with a new generation; a texture uploaded at
@@ -266,6 +277,7 @@ void memory_capture_submit();
 bool memory_take_capture(uint64_t value, uint64_t completed);
 int64_t memory_late_wait_ns();   // (hookshot: RX_VK_FRAME_TRACE's late_wait_ms)
 bool memory_capture_now(uint64_t value, uint64_t completed);   // (hookshot: made and taken at once)
+uint64_t memory_captures_begun();   // (hookshot: how many captures have been begun so far; any thread)
 /// The submission the replay records next (bindings note it: a pool's mirror is in use until it is done)
 void memory_recording_value(uint64_t value, uint64_t completed);
 // (hookshot) The recording being made, as vk_replay.cpp numbers them (Recording::part), and the newest of them in which
@@ -287,10 +299,12 @@ uint64_t memory_capture_view();          // (bumped when a capture is published 
 uint32_t memory_page_stamp(uint64_t gpu); // (that address's page only)
 uint64_t gpu_pool_end(uint64_t gpu);   // (hookshot) where the memory pool holding that address ends, 0: in none (vk_memory.cpp)
 uint64_t gpu_pool_start(uint64_t gpu); // (EvilOOT) and where it begins
+uint64_t gpu_pool_piece(uint64_t gpu, uint64_t n, bool& in_pool);   // (hookshot) how much of a range from gpu one import can hold (vk_memory.cpp)
 bool create_buffer_cached(uint64_t size, VkBufferUsageFlags usage, VkBuffer& buffer, VmaAllocation& allocation,
                           void** mapped, bool dedicated = false);   // (vk_vma.cpp: cached host memory, mapped)
 void flush_mapped(VmaAllocation allocation, uint64_t size);
 bool host_cached(VmaAllocation allocation);   // (its memory type has VK_MEMORY_PROPERTY_HOST_CACHED_BIT)
+bool host_coherent(VmaAllocation allocation);   // (its memory type has VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
 void flush_mapped_range(VmaAllocation allocation, uint64_t offset, uint64_t size);
 void invalidate_mapped(VmaAllocation allocation, uint64_t size);   // (the CPU is to read what the GPU wrote: a no-op in coherent memory)
 bool flush_mapped_checked(VmaAllocation allocation, uint64_t size);
@@ -319,6 +333,10 @@ uint64_t vk_timeline_completed();
 /// A future submission completion covering images retired during replay; zero: no safe value.
 uint64_t vk_retirement_value();
 void vk_timeline_wait(uint64_t v);
+/// (vk_replay.cpp) Waits (at most timeout_ns) for one part of a submission recorded so far (Recording::part, as memory_recording_part
+/// gives it) to be done on the GPU: 1 when it is, 0 when the wait ran out, -1 when that part cannot be waited for (the recordings
+/// have no timeline of their own, RX_VK_PER_QUEUE_FENCES=0, no part number, or the part is not known)
+int vk_part_wait(uint64_t part, uint64_t timeout_ns);
 uint32_t memory_generation();
 /// 1: a page of [guest, guest + size) was written after generation gen; 0: none was
 bool memory_written_since(uint64_t guest, uint64_t size, uint32_t gen);
@@ -364,6 +382,8 @@ void image_compact_ignore(size_t i);
 /// the last one; then *freed_bytes and *freed_blocks say what went back to the driver in all
 bool image_compact_pass_end(uint64_t* freed_bytes, uint32_t* freed_blocks);
 void destroy_image(VkImage image, VmaAllocation allocation);
+/// (hookshot) fn on the thread that destroys images, in order (vk_vma.cpp): a driver call the render thread need not wait for
+void reap(std::function<void()> fn);
 /// What an allocation really takes (VkMemoryRequirements.size: padding, alignment, the driver's metadata), 0 for none
 uint64_t allocation_size(VmaAllocation allocation);
 /// (dedicated: its own memory object, not a share of a 64 MB block: for the 16 to 32 MB ones that fit two to a block and leave
@@ -381,6 +401,8 @@ void destroy_sparse_buffer(VkBuffer buffer);
 /// Device-local memory this process uses and what the driver allows it now (VK_EXT_memory_budget), summed over the
 /// device-local heaps; false when unknown
 bool vram_usage(uint64_t* used, uint64_t* budget, uint64_t* block_free = nullptr);
+/// (vk_memory.cpp) the largest device-local heap's size: the card's video memory (0: none)
+uint64_t device_vram_bytes();
 /// vram_usage asked of the driver now (VMA asks again for a new frame index), for the status line; false when the driver
 /// gives no budget (VK_EXT_memory_budget): used is then the game's own allocations
 bool vram_usage_now(uint64_t* used, uint64_t* budget);
@@ -434,6 +456,9 @@ void prepare_guess(size_t out[3]);   // (the three parts' counts from the files,
 /// what is done kept (the program cache, the driver's) and not counted as a start that ended inside them
 void prepare_stop();
 bool prepare_stopped();
+/// (hookshot, vk_draw.cpp) The pipeline cache is being written out before the game (precompile_warm, a GB and more): every
+/// pipeline is counted by then, and the start-up screen says what it waits on
+bool prepare_saving();
 int driver_faults();   // (hookshot, vk_draw.cpp) the driver faults the pipeline compiles caught so far (guarded_graphics, guarded_compute)
 /// (hookshot, vk_draw.cpp) the pipelines the driver refused for want of memory so far (VK_ERROR_OUT_OF_DEVICE_MEMORY or
 /// _HOST_MEMORY): texture_frame gives textures up when it grows

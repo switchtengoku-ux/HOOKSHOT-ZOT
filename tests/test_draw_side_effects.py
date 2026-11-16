@@ -241,7 +241,14 @@ def main():
     header = (args.source / "gpu/vk/translate_wait.h").read_text(encoding="utf-8").replace("#pragma once", "")
     quick = ((args.source / "gpu/vk/quick_pipe.h").read_text(encoding="utf-8").replace("#pragma once", "")
              .replace('#include "translate_wait.h"', ""))
-    fixture = (FIXTURE.replace("@WRITES_MEMORY@", src[helper_start:helper_end]).replace("@BLOCK@", src[start:end])
+    block = src[start:end]
+    # (a cached program's stand-in picked again once its records are read, vk_shader.cpp's background reads: not this test's
+    # waits, and the fixture has no program cache; the block from its comment to its closing brace is left out)
+    stand_in = block.find("    // (hookshot) a cached program's stand-in")
+    if stand_in >= 0:
+        close = block.index("\n    }\n", block.index("if (cp->failed && program_is_stand_in(cp)) {", stand_in)) + len("\n    }\n")
+        block = block[:stand_in] + block[close:]
+    fixture = (FIXTURE.replace("@WRITES_MEMORY@", src[helper_start:helper_end]).replace("@BLOCK@", block)
                .replace("@TRANSLATE_WAIT_H@", header).replace("@QUICK_PIPE_H@", quick))
     with tempfile.TemporaryDirectory(prefix="draw-side-effects-") as tmp:
         cpp, exe = Path(tmp) / "test.cpp", Path(tmp) / "test"

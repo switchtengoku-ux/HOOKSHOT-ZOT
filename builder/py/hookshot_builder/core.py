@@ -3,6 +3,7 @@ child process, what the builder keeps on the PC, the game files found on it, and
 import ctypes
 import json
 import os
+import re
 import shutil
 import string
 import subprocess
@@ -76,7 +77,7 @@ def build_env(tools, workers=None, ngx_sdk=None):
         env["HOOKSHOT_NGX_SDK"] = ngx_sdk
     else:
         env.pop("HOOKSHOT_NGX_SDK", None)
-    for name, folder in (("EMSDK", "emsdk"), ("RX_CPM", "cpm"), ("WGPU_NATIVE", "wgpu-native")):
+    for name, folder in (("EMSDK", "emsdk"), ("RX_CPM", "cpm")):   # (no WebGPU renderer any more: no wgpu-native)
         p = os.path.join(tools.root, folder)
         if os.path.isdir(p):
             env[name] = p
@@ -609,3 +610,26 @@ def save_settings(s):
             json.dump(s, f)
     except OSError:
         pass
+
+
+# (the game's own countdown, every 10 s while it builds pipelines: gpu/vk/vk_draw.cpp prepare_progress_log,
+# "vk: noted pipelines: 18009 of 32713 pipelines in 2447 s, about 1998 s left")
+PIPELINES_LEFT = re.compile(r"vk: [a-z]+ pipelines: \d+ of \d+ pipelines in \d+ s, about (\d+) s left")
+
+
+def pipelines_left_in(line):
+    """The seconds the game's line says are left, or -1 when the line is not one of its countdowns"""
+    m = PIPELINES_LEFT.search(line)
+    return float(m.group(1)) if m else -1.0
+
+
+def shader_left(said, since, fraction, elapsed):
+    """The shaders' time left in seconds, or -1 while it cannot be told yet. (A slow PC took 58 minutes and more here while the
+    window said "Usually about 45 minutes" for the whole build: a player took it for stuck.) The game's own countdown while it
+    is fresh (said: what it said; since: seconds since, under 40), less the time since; else the step's bar so far (fraction
+    done after elapsed seconds), once it has moved enough to go by. As the Windows Builder's ShaderStep.Left"""
+    if said >= 0 and 0 <= since < 40:
+        return max(said - since, 0.0)
+    if 0.03 < fraction < 1 and elapsed >= 20:
+        return elapsed / fraction * (1 - fraction)
+    return -1.0

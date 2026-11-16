@@ -88,7 +88,7 @@ STAMPED_SOURCES = ("host/hos_main.c", "gpu/vk/vk_menu.cpp")
 OLD_TRANSLATOR = ("gpu/vk/eden/", "gpu/vk/sirit/", "gpu/vk/compat/", "gpu/vk/vk_shader.cpp", "gpu/vk/vk_bank.cpp",
                   "gpu/vk/vk_state.h", "gpu/vk/vk_api.h")
 TRANSLATOR_FILES = "nx2/translator_files.py"
-RENDERER_ONLY = ("gpu/vk/", "third_party/imgui/", "third_party/fidelityfx")
+RENDERER_ONLY = ("gpu/vk/", "third_party/imgui/", "third_party/fidelityfx", "third_party/xess/")
 INCLUDE = re.compile(r'#\s*include\s+"([^"]+)"')
 NO_MODULE = ("docs/", "tests/", ".github/", ".claude/")
 HEADERS = (".h", ".hpp", ".hh", ".inc", ".inl")

@@ -159,7 +159,11 @@ def split(gen, pieces, keep=None):
             f.write(mine)
             for name in sorted(names):
                 f.write(bodies[name])
-        costs["code_hot_%d.c" % i] = len(mine) + c
+        # (hookshot) the ORDER of the compile only (build.py starts the costliest first), not the pieces: a function of over 2 MB of
+        # C takes the compiler far longer than fn_cost says (the three of OoT's hot code, vector float code: 310 to 380 s each
+        # on a 6-core PC, when their pieces' other 8 to 10 MB take ~150 s). Counted 2.2 times here, those pieces start first
+        slow = sum(cost[f] for f in names if len(bodies[f]) > 2000000)
+        costs["code_hot_%d.c" % i] = len(mine) + c + slow * 12 // 10
         print("split_hot: piece %d: %d functions, %d MB, cost %d MB" % (i, len(names), sum(len(bodies[f]) for f in names) >> 20, c >> 20))
     chunks.write_costs(gen, costs)
     piece = {f: i for i, (_, names) in enumerate(bins) for f in names}

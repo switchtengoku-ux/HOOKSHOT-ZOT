@@ -31,7 +31,7 @@
 
 #define MIC_MAGIC 0x4D494349u   /* "MICI": the high word of our handle in the game's InputStreamType */
 #define MAX_STREAMS 4
-#define MAX_DEVICES 16
+#define MAX_DEVICES 64
 #define QUIET_NS 2000000000LL   /* a microphone that gives nothing this long is taken as gone */
 #define RETRY_NS 3000000000LL   /* a chosen microphone that is not there: tried again after this, */
 #define RETRY_MAX_NS 60000000000LL   /* twice as long each time up to this */

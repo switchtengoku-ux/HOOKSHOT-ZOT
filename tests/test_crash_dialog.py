@@ -76,6 +76,10 @@ int main(int argc, char **argv) {
         const int m = hos_crash_args(argc - 2, argv + 2, &a);   /* (argv[2] on: the helper's own command line, its program name first) */
         printf("%d|%llu|%s|%s|%s|%s\n", m, (unsigned long long)a.pid, a.run_id, a.record ? a.record : "", a.dir ? a.dir : "",
                a.log ? a.log : "NULL");
+    } else if (!strcmp(cmd, "options")) {   /* (the helper's command line: the run's settings file after the log) */
+        HosCrashArgs a;
+        const int m = hos_crash_args(argc - 1, argv + 1, &a);
+        printf("%d|%s\n", m, a.options ? a.options : "NULL");
     } else if (!strcmp(cmd, "wanted")) {   /* headless off pgo gamescope run [args...] */
         const char *run = strcmp(argv[6], "none") ? argv[6] : NULL;
         printf("%d\n", hos_crash_watch_wanted(argc - 6, argv + 6, atoi(argv[2]), atoi(argv[3]), atoi(argv[4]), atoi(argv[5]), run));
@@ -188,6 +192,8 @@ void hos_log(const char *fmt, ...) {
     fputc('\n', stderr);
 }
 void hos_log_flush(void) {}
+/* (host/options_path.c: the run's settings file; none here, so the helper reads the game folder's, as a helper given none) */
+const char *hos_options_file(void) { return ""; }
 static void note(const char *kind, const char *text) {
     const char *out = getenv("CRASH_TEST_OUT");
     FILE *f = out ? fopen(out, "ab") : NULL;
@@ -421,6 +427,14 @@ def logic_checks(exe, menu, tmp, form):
         assert run(exe, "args", "hookshot", "--crash-show", name, "/g", "-").startswith("-1|"), name
     for game in (["hookshot"], ["hookshot", "image.bin"], ["hookshot", "--user", "u", "--crash-watchx"]):
         assert run(exe, "args", *game).startswith("0|"), game
+    # (the run's settings file, in the user folder (host/options_path.c), after the log; left out, the game folder's)
+    opts = "/u/hookshot_options.ini"
+    assert run(exe, "options", *good).strip() == "1|NULL"
+    assert run(exe, "options", *good, opts).strip() == "1|" + opts
+    assert run(exe, "options", *good, "-").strip() == "1|NULL"
+    assert run(exe, "options", *good, "").startswith("-1|"), "an empty settings file"
+    assert run(exe, "options", *good, opts, "x").startswith("-1|"), "one too many"
+    assert run(exe, "options", "hookshot", "--crash-show", "crash-20261114T101112Z.txt", "/g", "-", opts).strip() == "2|" + opts
     print("PASS: the helper's command line: whole or refused, and never the game's own")
     # which starts get a helper
     assert run(exe, "wanted", 0, 0, 0, 0, RUN).strip() == "1"

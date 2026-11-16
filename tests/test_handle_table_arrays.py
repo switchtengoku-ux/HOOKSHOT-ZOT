@@ -65,7 +65,13 @@ def main():
         '}',
         block(shader, 'uint64_t stage_storage_base('),
         block(shader, 'uint32_t stage_storage_word('),
+        # (a draw's handles kept for it: vk_shader.cpp's memo, off on a thread that numbers no draws, as here)
+        'thread_local uint64_t handle_epoch = 0;\n'
+        'struct HandleMemo { uint64_t epoch; const void* st; const void* s; uint32_t program, element, value; };\n'
+        'thread_local HandleMemo handle_memo[32];\n'
+        'uint32_t stage_handle_eval(const NvnState& s, const Stage& st, uint32_t program, uint32_t element);',
         block(shader, 'uint32_t stage_handle(const NvnState& s, const Stage& st, uint32_t program, uint32_t element)'),
+        block(shader, 'uint32_t stage_handle_eval(const NvnState& s, const Stage& st, uint32_t program, uint32_t element) {'),
         block(shader, 'void stage_handles('),
     ])
     prelude = r'''

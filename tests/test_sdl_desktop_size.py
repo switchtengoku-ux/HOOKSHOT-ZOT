@@ -72,9 +72,12 @@ def main():
     parser.add_argument("--cc", default="gcc")
     args = parser.parse_args()
     src = (ROOT / "host" / "hos_sdl.c").read_text(encoding="utf-8")
-    m = re.search(r'^int hos_sdl_desktop_size\(int \*width, int \*height\) \{\n.*?^\}\n', src, re.S | re.M)
-    if not m:
+    # (the desktop mode's reader, which the size and the refresh rate share, and the size's own line over it)
+    mode = re.search(r'^static int desktop_mode\(int \*width, int \*height, int \*refresh_rate\) \{\n.*?^\}\n', src, re.S | re.M)
+    size = re.search(r'^int hos_sdl_desktop_size\(int \*width, int \*height\) \{[^\n]*\}\n', src, re.M)
+    if not mode or not size:
         raise SystemExit("FAIL: host/hos_sdl.c has no hos_sdl_desktop_size")
+    m = re.match(r"(.*)", mode.group(0) + size.group(0), re.S)
     with tempfile.TemporaryDirectory(prefix="sdl-desktop-size-") as tmp:
         c, exe = Path(tmp) / "desktop.c", Path(tmp) / "desktop"
         c.write_text(FIXTURE.replace("FUNCTION", m.group(0)), encoding="utf-8")

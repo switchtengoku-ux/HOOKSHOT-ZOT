@@ -2,12 +2,13 @@
 /* (hookshot) The window after a crash (host/hos_crash_dialog.c): the parts that decide, as plain C with no system calls, for
    tests/test_crash_dialog.py.
 
-   The game starts a small helper of itself early, `hookshot --crash-watch <pid> <run id> <game folder> <log>`, which waits for
+   The game starts a small helper of itself early, `hookshot --crash-watch <pid> <run id> <game folder> <log> <options>`
+   (<options> the run's hookshot_options.ini, host/options_path.c; "-" none, and left out the game folder's), which waits for
    the game to end and then reads what it left: a crash record of its run in bug-reports/pending (hos_crash_record.c), an
    unclean-end record (the game ended without its crash handler: killed, out of memory), the quit the player asked for, and
    the run's log. From those it decides whether to say anything (hos_crash_verdict), when it happened (hos_crash_stage) and
    why, where that is known (hos_crash_cause). A start that finds a crash record nobody showed (no helper could run) asks a
-   helper to show it: `hookshot --crash-show <record> <game folder> <log>`. Nothing is sent anywhere: Report copies a
+   helper to show it: `hookshot --crash-show <record> <game folder> <log> <options>`. Nothing is sent anywhere: Report copies a
    redacted text and opens the issue form, and only when the player clicks it. */
 #pragma once
 #include <stddef.h>
@@ -32,6 +33,8 @@ typedef struct HosCrashArgs {
     const char *record;    /* (show) a record's file name in bug-reports/pending */
     const char *dir;       /* the game folder */
     const char *log;       /* the run's log, NULL when it logged to no file ("-") */
+    const char *options;   /* the run's hookshot_options.ini (host/options_path.c), NULL when not given ("-", or left out): the
+                              game folder's */
 } HosCrashArgs;
 
 static inline int hos_crash_hex_id(const char *s) {
@@ -68,7 +71,8 @@ static inline int hos_crash_args(int argc, char **argv, HosCrashArgs *a) {
     if (argc < 2 || !argv[1]) return 0;
     const int watch = !strcmp(argv[1], HOS_CRASH_WATCH_ARG), show = !strcmp(argv[1], HOS_CRASH_SHOW_ARG);
     if (!watch && !show) return 0;
-    if (argc != (watch ? 6 : 5)) return -1;
+    const int base = watch ? 6 : 5;   /* (and the options file after the log, which a helper started before it came leaves out) */
+    if (argc != base && argc != base + 1) return -1;
     if (watch) {
         const char *p = argv[2];
         uint64_t pid = 0;
@@ -85,6 +89,11 @@ static inline int hos_crash_args(int argc, char **argv, HosCrashArgs *a) {
     if (!dir[0] || !log[0]) return -1;
     a->dir = dir;
     a->log = strcmp(log, "-") ? log : NULL;
+    if (argc == base + 1) {
+        const char *options = argv[base];
+        if (!options[0]) return -1;
+        a->options = strcmp(options, "-") ? options : NULL;
+    }
     a->mode = watch ? 1 : 2;
     return a->mode;
 }

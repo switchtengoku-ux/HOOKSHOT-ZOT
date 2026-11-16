@@ -73,6 +73,39 @@ def session_call(function):
     return call
 
 
+def open_windows_pipe(name, timeout):
+    """Open a local pipe, retrying only the Windows busy error until the deadline."""
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    create = kernel.CreateFileW
+    create.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                       wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
+    create.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+    deadline = time.monotonic() + timeout
+    while True:
+        handle = create(name, 0xC0000000, 0, None, 3, 0, None)  # read/write, OPEN_EXISTING
+        if handle != ctypes.c_void_p(-1).value:
+            try:
+                fd = msvcrt.open_osfhandle(handle, os.O_RDWR | os.O_BINARY)
+            except BaseException:
+                kernel.CloseHandle(handle)
+                raise
+            try:
+                return os.fdopen(fd, "r+b", buffering=0)
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.close(fd)
+                raise
+        error = ctypes.get_last_error()
+        if error != 231 or time.monotonic() >= deadline:  # ERROR_PIPE_BUSY only
+            raise ctypes.WinError(error)
+        time.sleep(min(0.02, max(0, deadline - time.monotonic())))
+
+
 class Bridge:
     """One connection: requests with ids, replies matched to them, events kept for watch"""
 
@@ -83,16 +116,7 @@ class Bridge:
             if WINDOWS:
                 name = path if path.startswith("\\\\.\\pipe\\") else "\\\\.\\pipe\\" + path
                 self.sock = None
-                deadline = time.monotonic() + timeout
-                while True:   # (the bridge keeps one instance waiting: a busy pipe is waited for)
-                    try:
-                        self.pipe = open(name, "r+b", buffering=0)
-                        break
-                    except OSError as e:
-                        # (busy: winerror 231, ERROR_PIPE_BUSY; missing pipes are not waited for)
-                        if getattr(e, "winerror", 0) != 231 or time.monotonic() > deadline:
-                            raise
-                        time.sleep(0.02)
+                self.pipe = open_windows_pipe(name, timeout)
             else:
                 self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                 self.sock.settimeout(timeout)
@@ -171,9 +195,13 @@ class Bridge:
             req["timeout"] = timeout
         self.send(req)
         wait = (timeout if timeout is not None else 3600 if cmd in ("press", "stick", "sequence") else 60) + 10
-        deadline = time.monotonic() + (wait if reply_timeout is None else reply_timeout)
-        while True:
-            msg = self.line(wait if reply_timeout is None else max(0, deadline - time.monotonic()))
+        limit = wait if reply_timeout is None else reply_timeout
+        deadline = time.monotonic() + limit
+        while True:   # (one deadline: an event line that comes meanwhile does not start the wait again)
+            left = deadline - time.monotonic()
+            if left <= 0 and b"\n" not in self.pending:
+                raise Failed("no answer from the game in %.0f s" % limit, 3)
+            msg = self.line(max(0, left))
             if msg is None:
                 if cmd == "quit":
                     return {"id": rid, "ok": True, "quitting": True}
@@ -1220,13 +1248,19 @@ def main(argv=None):
     p.add_argument("--json", action="store_true", help="the replies as JSON lines")
     sub = p.add_subparsers(dest="command", required=True)
 
+    def finite_float(text):
+        value = float(text)
+        if not math.isfinite(value):
+            raise argparse.ArgumentTypeError("expected a finite number")
+        return value
+
     def inputs(q):
         q.add_argument("--frames", type=int, default=8)
         q.add_argument("--at", type=int, default=0, help="frames from the next controller read")
         q.add_argument("--exclusive", action=argparse.BooleanOptionalAction, default=None,
                        help="the player's own devices left out meanwhile (default for test runs)")
         q.add_argument("--no-wait", action="store_true", help="reply as soon as it is queued")
-        q.add_argument("--timeout", type=float)
+        q.add_argument("--timeout", type=finite_float)
 
     q = sub.add_parser("launch", help="start a game folder with the bridge on")
     q.add_argument("game_dir")
@@ -1258,28 +1292,28 @@ def main(argv=None):
     inputs(q)
     q = sub.add_parser("stick")
     q.add_argument("which", choices=["L", "R", "l", "r"])
-    q.add_argument("x", type=float)
-    q.add_argument("y", type=float)
+    q.add_argument("x", type=finite_float)
+    q.add_argument("y", type=finite_float)
     inputs(q)
     q = sub.add_parser("sequence")
     q.add_argument("script", help="<at>:<buttons>[/<frames>],...")
     q.add_argument("--hos", action="store_true", help="times in seconds and holds in ms, as HOS_INPUT_SCRIPT")
     q.add_argument("--exclusive", action=argparse.BooleanOptionalAction, default=None)
     q.add_argument("--no-wait", action="store_true")
-    q.add_argument("--timeout", type=float)
+    q.add_argument("--timeout", type=finite_float)
     q = sub.add_parser("release", help="let go of this client's queued inputs and those of clients gone")
     q.add_argument("--all", action="store_true", help="every client's, also those still connected")
     q = sub.add_parser("shot")
     q.add_argument("path", nargs="?")
     q.add_argument("--after", type=int, help="the first present after this frame")
-    q.add_argument("--timeout", type=float)
+    q.add_argument("--timeout", type=finite_float)
     q = sub.add_parser("wait")
     q.add_argument("event", choices=["present", "frame", "in_play", "state", "loading_start", "loading_end", "change", "map"])
     q.add_argument("--frames", type=int)
     q.add_argument("--frame", type=int)
     q.add_argument("--state")
     q.add_argument("--map", help="map: until the game is in this map (default: any other map than now)")
-    q.add_argument("--timeout", type=float, default=60)
+    q.add_argument("--timeout", type=finite_float, default=60)
     q = sub.add_parser("option")
     q.add_argument("action", choices=["get", "set"])
     q.add_argument("name", nargs="?")
@@ -1300,13 +1334,13 @@ def main(argv=None):
                    help="read: how to print the bytes")
     q = sub.add_parser("teleport", help="(OoT) the debug teleport: a destination's index or map; none lists them")
     q.add_argument("to", nargs="?")
-    q.add_argument("--timeout", type=float, default=10, help="seconds for the game to take it (it does in play)")
-    q.add_argument("--arrive", type=float, metavar="SECS", help="then wait up to SECS until the game is in the map")
+    q.add_argument("--timeout", type=finite_float, default=10, help="seconds for the game to take it (it does in play)")
+    q.add_argument("--arrive", type=finite_float, metavar="SECS", help="then wait up to SECS until the game is in the map")
     q.add_argument("--no-wait", action="store_true", help="reply once asked, without whether the game took it")
     q = sub.add_parser("age", help="(OoT) the Debug tab's Switch age: child or adult (none: the other age)")
     q.add_argument("to", nargs="?", choices=["child", "adult"])
-    q.add_argument("--timeout", type=float, default=10, help="seconds for the game to take it (it does in play)")
-    q.add_argument("--arrive", type=float, metavar="SECS", help="then wait up to SECS until the map has reloaded (its "
+    q.add_argument("--timeout", type=finite_float, default=10, help="seconds for the game to take it (it does in play)")
+    q.add_argument("--arrive", type=finite_float, metavar="SECS", help="then wait up to SECS until the map has reloaded (its "
                    "load ended)")
     q.add_argument("--no-wait", action="store_true", help="reply once asked, without whether the game took it")
     q = sub.add_parser("saves", help="the save folder the game uses: its files, newest slot first")

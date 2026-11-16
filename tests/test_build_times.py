@@ -193,6 +193,21 @@ class PhaseTests(unittest.TestCase):
         c.enter(None)
         self.assertEqual((c.seconds["lift"], c.seconds["compile"]), (25.0, 5.0))
 
+    def test_the_finish_is_cut_into_its_parts(self):
+        """part(): the time since the stage began, or since its last part, under the stage, and shown under it"""
+        c = self.clock()
+        self.t[0] = 110.0
+        c.enter("finish")
+        self.t[0] = 112.0
+        c.part("copying the new files in")
+        self.t[0] = 142.0
+        c.part("button prompts")
+        self.t[0] = 143.0
+        c.enter(None)
+        s = c.seconds
+        self.assertEqual((s["finish"], s["finish: copying the new files in"], s["finish: button prompts"]), (33.0, 2.0, 30.0))
+        self.assertTrue(any("button prompts" in row and "30 s" in row for row in c.table()))
+
     def test_the_planning_is_the_compile_stage_only(self):
         c = self.clock()
         c.enter("finish")

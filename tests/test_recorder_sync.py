@@ -97,7 +97,9 @@ C_COMMENT_OR_STRING = re.compile(r'//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\\n])*"|\'(?:\
 UI_RECORD_CALL = re.compile(r"\bui\s*::\s*record(?:_to)?\s*\(")
 NGX_RECORD_CALL = re.compile(r"\bNGX_(?:VULKAN_\w+_EXT|VK_\w+_DLSSG)\s*\(")   # (NVIDIA NGX's create/evaluate, DLSS's and frame generation's: its own commands into cmd)
 FFX_RECORD_CALL = re.compile(r"\bl\s*\.\s*dispatch\s*\(")   # (AMD FidelityFX's ffxDispatch, through its loaded pointer: its own commands into cmd)
-OPAQUE_RECORD_CALL = re.compile(UI_RECORD_CALL.pattern + "|" + NGX_RECORD_CALL.pattern + "|" + FFX_RECORD_CALL.pattern)
+XESS_RECORD_CALL = re.compile(r"\bl\s*\.\s*execute\s*\(")   # (Intel XeSS's xessVKExecute, through its loaded pointer: its own commands into cmd)
+OPAQUE_RECORD_CALL = re.compile(UI_RECORD_CALL.pattern + "|" + NGX_RECORD_CALL.pattern + "|" + FFX_RECORD_CALL.pattern + "|" +
+                                XESS_RECORD_CALL.pattern)
 B_DIRECT_BEFORE = re.compile(r"::\s*mkwvk\s*::\s*rec\s*::\s*boundary\s*\(\s*::\s*mkwvk\s*::\s*rec\s*::\s*B_DIRECT\s*\)\s*;\Z")
 
 
@@ -242,6 +244,13 @@ def check_sources():
         problems.append("vk_fsr4.cpp: no ffxDispatch call (l.dispatch) found: update FFX_RECORD_CALL")
     elif not direct_unbounded(fsr4.replace(B_DIRECT_STMT, "", 1), "vk_fsr4.cpp", FFX_RECORD_CALL):
         problems.append("the B_DIRECT check missed an ffxDispatch recording without its boundary")
+    # (Intel XeSS records into cmd through xessVKExecute: after a B_DIRECT boundary; control: that boundary removed)
+    xess = (VK / "vk_xess.cpp").read_text(encoding="utf-8")
+    problems += direct_unbounded(xess, "vk_xess.cpp", XESS_RECORD_CALL)
+    if not XESS_RECORD_CALL.search(blank_comments(xess)):
+        problems.append("vk_xess.cpp: no xessVKExecute call (l.execute) found: update XESS_RECORD_CALL")
+    elif not direct_unbounded(xess.replace(B_DIRECT_STMT, "", 1), "vk_xess.cpp", XESS_RECORD_CALL):
+        problems.append("the B_DIRECT check missed an xessVKExecute recording without its boundary")
     # (and any other recording vk_work.h does not see must be registered: every hand-written note_work() follows a known one)
     for path in sorted(VK.glob("*.cpp")):
         problems += opaque_unregistered(path.read_text(encoding="utf-8"), path.name)

@@ -106,6 +106,20 @@ def dlss_args(dlss):
     return ["--fetch-ngx-sdk", "--accept-nvidia-license"] if dlss else []
 
 
+def folder_has_fsr(folder):
+    """Whether a game folder was built with AMD FSR 4: make_game.py's mark in it (FSR_MARK)."""
+    return bool(folder) and os.path.isfile(os.path.join(folder, make_game.FSR_MARK))
+
+
+def fsr_args(fsr, toggled=True):
+    """make_game.py's AMD FSR 4 arguments: --fsr when ticked; an update whose tick was not changed here says nothing, and the
+    folder's mark keeps what it was built with (make_game.py fsr_wanted); one unticked here builds it without (--no-fsr).
+    Nothing is downloaded on Linux: AMD's library, amd_fidelityfx_upscaler_vk.so, is the player's, in the game folder"""
+    if not toggled:
+        return []
+    return ["--fsr"] if fsr else ["--no-fsr"]
+
+
 def make_game_env(dlss, environ=None):
     """The environment make_game.py runs in. HOOKSHOT_NGX_SDK is set only when DLSS is chosen (one set in the shell is not
     passed on when unticked, as on Windows). Every build compiles hookshot_vk.so (the AppImage carries no built one)."""
@@ -115,6 +129,29 @@ def make_game_env(dlss, environ=None):
     else:
         env.pop("HOOKSHOT_NGX_SDK", None)
     return env
+
+
+# (the game's own countdown, every 10 s while it builds pipelines: gpu/vk/vk_draw.cpp prepare_progress_log,
+# "vk: noted pipelines: 18009 of 32713 pipelines in 2447 s, about 1998 s left")
+PIPELINES_LEFT = re.compile(r"vk: [a-z]+ pipelines: \d+ of \d+ pipelines in \d+ s, about (\d+) s left")
+
+
+def pipelines_left_in(line):
+    """The seconds the game's line says are left, or -1 when the line is not one of its countdowns"""
+    m = PIPELINES_LEFT.search(line)
+    return float(m.group(1)) if m else -1.0
+
+
+def shader_left(said, since, fraction, elapsed):
+    """The shaders' time left in seconds, or -1 while it cannot be told yet. (A slow PC took 58 minutes and more here while the
+    window said "Usually about 45 minutes" for the whole build: a player took it for stuck.) The game's own countdown while it
+    is fresh (said: what it said; since: seconds since, under 40), less the time since; else the step's bar so far (fraction
+    done after elapsed seconds), once it has moved enough to go by. As the Windows Builder's ShaderStep.Left"""
+    if said >= 0 and 0 <= since < 40:
+        return max(said - since, 0.0)
+    if 0.03 < fraction < 1 and elapsed >= 20:
+        return elapsed / fraction * (1 - fraction)
+    return -1.0
 
 
 def left_text(seconds):
@@ -128,6 +165,7 @@ def left_text(seconds):
 
 
 TRACK_NAMES = {"release": "Release", "rc": "Release candidate", "nightly": "Nightly"}
+NEWEST = "Newest on the update track"   # (the Version menu's first choice)
 
 
 def load_config():
@@ -514,10 +552,15 @@ class Builder(tk.Tk):
         self.latest = None
         self.source_picked = False
         self.dlss_toggled = False
+        self.fsr_toggled = False
         self.tools = linux_update.tools_tag(linux_update.running_root() or ROOT)
         # (the update track: the one chosen in the Track menu, saved; by default these tools' own)
         own = linux_update.track_of(self.tools)
         self.track = tk.StringVar(value=TRACK_NAMES[self.cfg.get("track") if self.cfg.get("track") in linux_update.TRACKS else own])
+        # (the Version menu: the track's newest, or a release chosen there, saved; its list read when it is first opened)
+        self.pinned = self.cfg.get("version") or None
+        self.version = tk.StringVar(value=self.pinned or NEWEST)
+        self.version_tags, self.versions_asked = {}, False
         self.status = tk.StringVar()
         self.kind = tk.StringVar(value=self.cfg.get("kind", "nup"))
         self.nup = tk.StringVar(value=self.cfg.get("nup", ""))
@@ -530,6 +573,7 @@ class Builder(tk.Tk):
         self.language = tk.StringVar(value=dict(make_game.LANGUAGES).get(code, names[0]))
         self.prepare = tk.BooleanVar(value=self.cfg.get("prepare", "1") != "0")   # (make_game.py's last step: off, at the first start)
         self.dlss = tk.BooleanVar(value=self.cfg.get("dlss", "0") == "1")
+        self.fsr = tk.BooleanVar(value=self.cfg.get("fsr", "0") == "1")   # (AMD FSR 4: make_game.py --fsr)
         self.check_text = tk.StringVar()
         self.space_text = tk.StringVar()
         self.stage_text = tk.StringVar()
@@ -913,12 +957,23 @@ class Builder(tk.Tk):
                              cursor="hand2")
         track.grid(row=1, column=0, sticky="we")
         track.bind("<<ComboboxSelected>>", self.on_track_changed)
+        # (the Version menu: Newest, the track's newest as before, or any release on git.notrexed.dev, older ones too)
+        self.section(tracks, "Version", 2, top=12)
+        self.version_box = ttk.Combobox(tracks, textvariable=self.version, values=[NEWEST] + ([self.pinned] if self.pinned else []),
+                                        state="readonly", font="HsNote", cursor="hand2", postcommand=self.load_versions)
+        self.version_box.grid(row=3, column=0, sticky="we")
+        self.version_box.bind("<<ComboboxSelected>>", self.on_version_changed)
         ttk.Checkbutton(options, text="Prepare shaders now", variable=self.prepare, cursor="hand2").pack(anchor="w")
         ttk.Label(options, text="A few minutes at the end of the build. Unticked, the game prepares them at its first start, "
                   "behind a black window.", style="Small.TLabel", wraplength=px(540)).pack(anchor="w", padx=(px(26), 0), pady=(px(2), 0))
         ttk.Checkbutton(options, text="NVIDIA DLSS (downloads NVIDIA's SDK under NVIDIA's license)", variable=self.dlss,
                         command=self.on_dlss_changed, cursor="hand2").pack(anchor="w", pady=(px(12), 0))
         ttk.Label(options, text="For NVIDIA RTX graphics cards. NVIDIA's files stay on this PC: never share a game folder built with them.",
+                  style="Small.TLabel", wraplength=px(540)).pack(anchor="w", padx=(px(26), 0), pady=(px(2), 0))
+        ttk.Checkbutton(options, text="AMD FSR 4", variable=self.fsr, command=self.on_fsr_changed,
+                        cursor="hand2").pack(anchor="w", pady=(px(12), 0))
+        ttk.Label(options, text="For AMD Radeon RX 9000 graphics cards. AMD's FSR 4 library is not included: put "
+                  "amd_fidelityfx_upscaler_vk.so in the game folder, then choose AMD FSR 4 as the Upscaler in the game's menu.",
                   style="Small.TLabel", wraplength=px(540)).pack(anchor="w", padx=(px(26), 0), pady=(px(2), 0))
 
         ttk.Label(bottom, textvariable=self.status, style="Status.TLabel", wraplength=px(800)).grid(
@@ -1140,6 +1195,12 @@ class Builder(tk.Tk):
         save_config(self.cfg)
         self.apply_mode()
 
+    def on_fsr_changed(self):
+        self.fsr_toggled = True
+        self.cfg["fsr"] = "1" if self.fsr.get() else "0"
+        save_config(self.cfg)
+        self.apply_mode()
+
     def check_version(self):
         args = ["--nup", self.nup.get()] if self.kind.get() == "nup" else ["--exefs", self.exefs.get()]
         self.check_text.set("Checking the game version...")
@@ -1158,6 +1219,10 @@ class Builder(tk.Tk):
         threading.Thread(target=run, daemon=True).start()
 
     def lookup_latest(self):
+        if self.pinned:   # (a version chosen in the Version menu: that one)
+            self.lines.put(("latest", self.pinned))
+            return
+
         def run():
             forced = os.environ.get("HOOKSHOT_LATEST_TAG")
             tag = None if forced == "none" else (forced or linux_update.latest_tag(track=track))
@@ -1175,7 +1240,9 @@ class Builder(tk.Tk):
         self.mode = linux_update.choose_mode(game, self.tools, self.latest, self.source_picked, kept, self.switching())
         dlss_changed = bool(kept and game and not self.source_picked and getattr(self, "dlss_toggled", False) and
                             hasattr(self, "dlss") and bool(self.dlss.get()) != folder_has_dlss(expanded))
-        if self.mode == "up-to-date" and dlss_changed:
+        fsr_changed = bool(kept and game and not self.source_picked and getattr(self, "fsr_toggled", False) and
+                           hasattr(self, "fsr") and bool(self.fsr.get()) != folder_has_fsr(expanded))
+        if self.mode == "up-to-date" and (dlss_changed or fsr_changed):
             self.mode = "update-game"
         button = self.build_button
         if button is None:
@@ -1194,9 +1261,10 @@ class Builder(tk.Tk):
         except tk.TclError:
             pass
         target = linux_update.update_target(self.latest, self.tools, self.switching())
-        if self.mode == "update-game" and dlss_changed and game == target:
-            self.status.set("Update builds your game again %s NVIDIA DLSS."
-                            % ("with" if self.dlss.get() else "without"))
+        if self.mode == "update-game" and (dlss_changed or fsr_changed) and game == target:
+            what = [("with" if self.dlss.get() else "without") + " NVIDIA DLSS"] if dlss_changed else []
+            what += [("with" if self.fsr.get() else "without") + " AMD FSR 4"] if fsr_changed else []
+            self.status.set("Update builds your game again %s." % " and ".join(what))
         elif self.mode == "update-game":
             self.status.set("Hookshot %s is available. Your game is %s. Update downloads only what changed, then compiles what changed."
                             % (target, game))
@@ -1267,11 +1335,61 @@ class Builder(tk.Tk):
         return next((k for k, v in TRACK_NAMES.items() if v == self.track.get()), "release")
 
     def switching(self):
-        """(a Track other than these tools' own: its newest is installed, even an older version)"""
-        return self.track_id() != linux_update.track_of(self.tools)
+        """(a Track other than these tools' own: its newest is installed, even an older version; or a version chosen in the
+        Version menu: that one, older or newer)"""
+        return bool(getattr(self, "pinned", None)) or self.track_id() != linux_update.track_of(self.tools)
+
+    def load_versions(self):
+        """The Version menu opened: every release, read once in the background (again after a failure)"""
+        if self.versions_asked:
+            return
+        self.versions_asked = True
+        self.version_box.configure(values=[NEWEST, "Reading the releases from git.notrexed.dev…"])
+
+        def run():
+            self.lines.put(("versions", linux_update.all_releases()))
+        threading.Thread(target=run, daemon=True).start()
+
+    def fill_versions(self, releases):
+        if releases is None:
+            self.versions_asked = False
+            values = [NEWEST, "git.notrexed.dev did not answer: open the menu again to retry"]
+            self.version_tags = {}
+        else:
+            self.version_tags = {linux_update.release_label(r): r for r in releases}
+            values = [NEWEST] + list(self.version_tags)
+        if self.pinned and not any(r["tag"] == self.pinned for r in self.version_tags.values()):
+            values.insert(1, self.pinned)
+        try:
+            self.version_box.configure(values=values)
+            shown = next((k for k, r in self.version_tags.items() if r["tag"] == self.pinned), self.pinned or NEWEST)
+            self.version.set(shown)
+        except tk.TclError:
+            pass
+
+    def on_version_changed(self, _event=None):
+        label = self.version.get()
+        r = self.version_tags.get(label)
+        tag = None if label == NEWEST else r["tag"] if r else (label if label == self.pinned else "")
+        if tag == "" or (r and not r["installable"]):
+            if r and not r["installable"]:
+                messagebox.showinfo("Hookshot", "%s has no Linux list (%s) to install from." % (r["tag"], linux_update.LIST_NAME))
+            self.version.set(next((k for k, v in self.version_tags.items() if v["tag"] == self.pinned), self.pinned or NEWEST))
+            return
+        if tag == self.pinned:
+            return
+        self.pinned = tag
+        self.cfg["version"] = tag
+        save_config(self.cfg)
+        self.latest = None
+        self.apply_mode()
+        self.lookup_latest()
 
     def on_track_changed(self, _event=None):
         self.cfg["track"] = self.track_id()
+        self.pinned = self.cfg["version"] = None   # (a track chosen: its newest, not a version chosen before)
+        if hasattr(self, "version"):
+            self.version.set(NEWEST)
         save_config(self.cfg)
         self.latest = None
         self.apply_mode()
@@ -1349,7 +1467,7 @@ class Builder(tk.Tk):
             return
         dlss = bool(self.dlss.get()) if getattr(self, "dlss_toggled", False) else folder_has_dlss(folder)
         cmd = [sys.executable, "-I", os.path.join(ROOT, "nx2", "make_game.py"), "--update", folder] + \
-            ([] if self.prepare.get() else ["--no-prepare-shaders"]) + dlss_args(dlss)   # (as the last build chose)
+            ([] if self.prepare.get() else ["--no-prepare-shaders"]) + dlss_args(dlss) +             fsr_args(bool(self.fsr.get()), getattr(self, "fsr_toggled", False))   # (as the last build chose)
         self.heading.configure(text="Updating your game")
         self.stage_text.set("Compiling what changed")
         self.started = time.time()
@@ -1404,7 +1522,7 @@ class Builder(tk.Tk):
         # fewer, 80% of the total memory at 3.5 GB each, and the CPU sat at 29%
         cmd = [sys.executable, "-I", os.path.join(ROOT, "nx2", "make_game.py")] + src + ["--out", out, "--language", code] + \
             ([] if jobs is None else ["--jobs", str(jobs)]) + ([] if self.prepare.get() else ["--no-prepare-shaders"]) + \
-            (dlss_args(True) if dlss else [])
+            (dlss_args(True) if dlss else []) + (fsr_args(True) if getattr(self, "fsr", None) and self.fsr.get() else [])
         slow = slow_disk_warning(out)   # (a warning, not a stop: a hard drive still builds, only much slower)
         if slow is not None and not messagebox.askokcancel("Hookshot", slow):
             return
@@ -1427,6 +1545,7 @@ class Builder(tk.Tk):
         self.changed, self.compiled_files = -1, 0
         self.eta = None
         self.compile_started = None
+        self.shader_started, self.shader_fraction, self.shader_said, self.shader_said_at = None, 0.0, -1.0, 0.0
         self.times = None
         self.shaders_later = False
         self.built = self.error = None   # (this run's own: what make_game.py says, or Cancel)
@@ -1478,6 +1597,13 @@ class Builder(tk.Tk):
                 text += " · compiling %d:%02d" % (c // 60, c % 60)
             if self.eta is not None:
                 text += " · " + left_text(self.eta)
+            if self.shader_started:
+                # (the shaders' own countdown: on a slow PC this step alone can take an hour)
+                now = time.time()
+                c = int(now - self.shader_started)
+                left = shader_left(self.shader_said, now - self.shader_said_at if self.shader_said >= 0 else -1,
+                                   self.shader_fraction, now - self.shader_started)
+                text += " · preparing shaders %d:%02d · %s" % (c // 60, c % 60, left_text(left) if left >= 0 else "estimating…")
             self.time_text.set(text)
             self.after(1000, self.tick)
 
@@ -1487,6 +1613,9 @@ class Builder(tk.Tk):
                 kind, v = self.lines.get_nowait()
                 if kind == "check":
                     self.check_text.set(v)
+                elif kind == "versions":
+                    if hasattr(self, "version_box"):
+                        self.fill_versions(v)
                 elif kind == "latest":
                     self.latest = v or None
                     self.apply_mode()
@@ -1522,10 +1651,14 @@ class Builder(tk.Tk):
             self.bar.configure(mode="determinate", value=0)
             # (the compile's clock and countdown are the compile's: a later step, the minutes-long shaders one, without them)
             self.compile_started = time.time() if stage == "compile" else None
+            self.shader_started = time.time() if stage == "shaders" else None   # (its countdown: shader_left)
+            self.shader_fraction, self.shader_said = 0.0, -1.0
             self.eta = None
         elif line.startswith("@@progress "):
             try:
                 self.bar.configure(value=float(line.split()[1]))
+                if self.shader_started:
+                    self.shader_fraction = float(line.split()[1])
             except ValueError:
                 pass
         elif line.startswith("@@plan "):
@@ -1565,6 +1698,8 @@ class Builder(tk.Tk):
             self.built = line[7:]
         elif line.startswith("@@error "):
             self.error = line[8:]
+        elif pipelines_left_in(line) >= 0:
+            self.shader_said, self.shader_said_at = pipelines_left_in(line), time.time()
         elif line.startswith(make_game.NOT_PREPARED):
             # (left to the first start; or, the GPU driver having stopped responding, each shader to when it is first drawn)
             self.shaders_later = "first start" if line.endswith(make_game.FIRST_START) else "first drawn"

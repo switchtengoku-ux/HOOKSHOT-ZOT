@@ -1,10 +1,10 @@
 # Temporal history validity
 
-DLSS, FSR 4 and the default FSR 3.1 path use the shared temporal chain. FSR 3.1's legacy path and frame interpolation prepare their own inputs. If camera reprojection fails, motion vectors are unavailable and the previous picture has no valid mapping to the current one. Each path must deliver a reset in that same frame rather than retaining unusable history.
+DLSS, FSR 4, XeSS and the default FSR 3.1 path use the shared temporal chain. FSR 3.1's legacy path and frame interpolation prepare their own inputs. If camera reprojection fails, motion vectors are unavailable and the previous picture has no valid mapping to the current one. Each path must deliver a reset in that same frame rather than retaining unusable history.
 
 Validate both input matrices and each result coefficient before converting to float. A finite double outside the float range is rejected before conversion. Preserve the existing algorithm, singularity threshold and age/size rules: valid consecutive camera motion retains history. This adds no camera-cut heuristic or interface change.
 
-The game-free fixture compiles actual reprojection math, both preparation policies, the shared frame reset and all three consumer assignments (DLSS, FSR4, FSR3.1). It covers singular and non-finite inputs, float overflow/boundaries, recovery, frame gaps, FSR3.1 size changes and valid perspectives at16:9 and ultrawide. Engine SDKs and a GPU are not required. CPU cases do not prove in-game frequency, visual gains or GPU handling of injected invalid matrices.
+The game-free fixture compiles actual reprojection math, both preparation policies, the shared frame reset and all four consumer assignments (DLSS, FSR4, XeSS, FSR3.1). It covers singular and non-finite inputs, float overflow/boundaries, recovery, frame gaps, FSR3.1 size changes and valid perspectives at16:9 and ultrawide. Engine SDKs and a GPU are not required. CPU cases do not prove in-game frequency, visual gains or GPU handling of injected invalid matrices.
 
 ## PsychoV35 with temporal upscalers
 
@@ -13,7 +13,7 @@ spatial upscale with FXAA, used where the game network cannot run correctly; thi
 input and output views, output shader and history all use the matching format. A format change discards its history;
 the prior image stays alive until in-flight work can no longer use it. Its perceptual input is decoded once on output.
 
-NVIDIA DLSS/DLAA, AMD FSR 4 (and its Native AA) and FSR 3.1 on the shared chain automatically take the Native HDR PsychoV35 scene, whose gameplay network input and output are RGBA16F (`upscaler_rows.h` `takes_psychov35`: the engines the chain gives linear light in HDR). `RX_VK_PSYCHOV35_DLSS=0` disables this compatibility route; unset, empty or nonzero enables it. Both this chain and independent FSR FG admission use `upscaler_rows::psychov35_compatibility`, cached once per process. Vanilla's packed B10G11R11 route is unchanged. FSR 3.1's legacy `RX_VK_FSR3_CHAIN=0` upscaler remains unsupported; TAAU and Off are separate paths independent of this switch.
+NVIDIA DLSS/DLAA, AMD FSR 4 (and its Native AA), Intel XeSS (and its Native AA) and FSR 3.1 on the shared chain automatically take the Native HDR PsychoV35 scene, whose gameplay network input and output are RGBA16F (`upscaler_rows.h` `takes_psychov35`: the engines the chain gives linear light in HDR). `RX_VK_PSYCHOV35_DLSS=0` disables this compatibility route; unset, empty or nonzero enables it. Both this chain and independent FSR FG admission use `upscaler_rows::psychov35_compatibility`, cached once per process. Vanilla's packed B10G11R11 route is unchanged. FSR 3.1's legacy `RX_VK_FSR3_CHAIN=0` upscaler remains unsupported; TAAU and Off are separate paths independent of this switch.
 
 FSR 3.1's passes are already compiled for HDR input (`scripts/fsr3_shaders.py`). Its shared-chain engine opts into
 linear HDR preparation/output only for Native HDR PsychoV35. Vanilla retains its existing perceptual preparation.
@@ -27,7 +27,7 @@ linear filter. This path decodes the network input's perceptual colour once, unl
 which receives already-linear colour. It adds no temporal anti-aliasing or frame-generation input handoff. Mixed
 formats, unsupported scene formats and unrelated compute dispatches remain rejected.
 
-The network's perceptual colour encoding still needs the existing HDR prep square to linear light, even though the scene tone-map pass itself writes linear colour. Storage precision does not determine that encoding. The typed RGBA16F output pass writes the engine's linear result without squaring again. FSR 4 takes the same pair: its context is made for HDR, linear colour while the game presents PQ (`vk_fsr4.cpp`), and the route waits for that context as DLSS's waits for its HDR feature (`RX_VK_FSR4_HDR=0` prevents it). Changing the tone mapper or input format resets history.
+The network's perceptual colour encoding still needs the existing HDR prep square to linear light, even though the scene tone-map pass itself writes linear colour. Storage precision does not determine that encoding. The typed RGBA16F output pass writes the engine's linear result without squaring again. FSR 4 takes the same pair: its context is made for HDR, linear colour while the game presents PQ (`vk_fsr4.cpp`), and the route waits for that context as DLSS's waits for its HDR feature (`RX_VK_FSR4_HDR=0` prevents it). XeSS takes the same pair, its context made for HDR with XeSS's own exposure (`vk_xess.cpp`; `RX_VK_XESS_HDR=0` prevents it). Changing the tone mapper or input format resets history.
 
 Regenerate the output variant with glslang 16.6.0:
 

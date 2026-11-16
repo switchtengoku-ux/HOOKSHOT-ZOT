@@ -129,10 +129,10 @@ class Fetch(unittest.TestCase):
     def test_which_sources(self):
         r = str(ROOT)
         for rel in ("third_party/opus/celt/celt.c", "third_party/zstd/lib/common/xxhash.c", "third_party/imgui/imgui.cpp",
-                    "third_party/zbic/zstd.c", "gpu/vk/eden/x.cpp", "gpu/vk/sirit/src/sirit.cpp",
-                    "gpu/third_party/suyu/shader_recompiler/x.cpp"):
+                    "third_party/zbic/zstd.c", "gpu/vk/eden/x.cpp", "gpu/vk/sirit/src/sirit.cpp"):
             self.assertTrue(tpo.is_third_party(os.path.join(r, rel), r), rel)
         for rel in ("gpu/vk/vk_draw.cpp", "gpu/vk/vk_vma.cpp", "host/hos_main.c", "gpu/render/rx_core.cpp",
+                    "gpu/third_party/suyu/video_core/textures/astc.cpp",   # (the Vulkan back end's own, with its play profile)
                     "third_party/a64-kit/rt/a64.c", "work/sa/gen/code_001.c"):
             self.assertFalse(tpo.is_third_party(os.path.join(r, rel), r), rel)
         self.assertFalse(tpo.is_third_party("/elsewhere/third_party/opus/x.c", r))
@@ -279,7 +279,6 @@ class BuildScript(unittest.TestCase):
         self.assertIn("(tp_vflags if lib else vflags + vk_pgo_flags)", main)
         self.assertIn("imgui_deps + tp_deps", main)
         self.assertIn("zstd_deps + tp_deps", main)
-        self.assertIn("gdeps + tp_deps if third_party_objects.is_third_party(src) else gdeps", main)
         # (the release's run: those jobs alone, written as the set, nothing linked)
         made = main.index("third_party_objects.write(a.third_party_objects")
         self.assertLess(made, main.index("if a.standalone and not vk_only and LINUX:"))

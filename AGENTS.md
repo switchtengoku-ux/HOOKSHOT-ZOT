@@ -13,6 +13,9 @@ What CONTRIBUTING.md does not spell out, and agents trip on:
 - **Tests read the source.** Many checks in `tests/` cut a function out of a source file by its text and compile it
   with stubs (17 read `gpu/vk/vk_menu.cpp` alone). Renaming or reshaping a function can break a check far from your
   change: run `python -I -B tests/run_all.py` and update the check in the same PR rather than weakening it.
+- **A `doc:` comment names a rule.** `// doc: docs/design.md#...` above a function says the rule it keeps is written
+  there: read it before you simplify a capture, a wait or a pass split away. `tests/test_doc_anchors.py` checks that
+  every anchor resolves, and that the functions behind design.md's rules keep theirs.
 - **The renderer's interface is versioned.** A change to `MkwVkHost` or `MkwVkRenderer` in `gpu/vk/vk_api.h` bumps
   `MKWVK_API_VERSION`.
 - **Generated files are generated.** The SPIR-V headers in `gpu/vk/shaders/` (`*_spv.h`) are compiled from the shader

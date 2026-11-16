@@ -360,6 +360,57 @@ def fetch_bytes(url, timeout=60, stop=None):
     raise RuntimeError(last)
 
 
+# (hookshot, 2026-11-15) The Version menu: every release on git.notrexed.dev, page by page (Forgejo gives 50 a page at most), read
+# when the menu is first opened. As the Windows builder's ReleaseList.cs. tests/test_builder_version_menu.py
+RELEASES_PAGE = "https://git.notrexed.dev/api/v1/repos/Hookshot/Hookshot/releases?limit=50&page=%d"
+PAGE_SIZE, MOST_PAGES = 50, 40
+
+
+def releases_in(pages):
+    """The menu's releases from the API's pages (each a JSON list): drafts and tags that are no version left out (the parts',
+    rc's and nightly's releases hold files), each tag once, newest version first. Each a dict: tag, prerelease, published
+    (YYYY-MM-DD or ""), installable (it has this builder's list, hookshot-linux.txt, to install from)"""
+    import json
+    seen, out = set(), []
+    for page in pages:
+        items = json.loads(page) if isinstance(page, (str, bytes)) else page
+        if not isinstance(items, list):
+            continue
+        for r in items:
+            tag = r.get("tag_name") or ""
+            if not re.fullmatch(r"v\d+\.\d+\.\d+(-rc\.\d+)?", tag) or tag in seen or r.get("draft"):
+                continue
+            seen.add(tag)
+            names = {a.get("name") for a in r.get("assets") or []}
+            out.append({"tag": tag, "prerelease": bool(r.get("prerelease")), "published": (r.get("published_at") or "")[:10],
+                        "installable": LIST_NAME in names})
+    out.sort(key=lambda r: release_key(r["tag"]), reverse=True)
+    return out
+
+
+def all_releases(get=None):
+    """Every release, all pages, newest first; None when git.notrexed.dev did not answer (a page failing part way too, so the
+    menu never shows a list cut short as if it were all)"""
+    import json
+    get = get or (lambda url: fetch_bytes(url, 20))
+    pages = []
+    try:
+        for n in range(1, MOST_PAGES + 1):
+            items = json.loads(get(RELEASES_PAGE % n).decode("utf-8"))
+            pages.append(items)
+            if not isinstance(items, list) or len(items) < PAGE_SIZE:
+                break
+    except Exception:
+        return None
+    return releases_in(pages)
+
+
+def release_label(r):
+    """What the menu shows for one: "v2.3.1 · 2026-11-15", a release candidate and one that cannot be installed saying so"""
+    return r["tag"] + (" · " + r["published"] if r["published"] else "") + (" · release candidate" if r["prerelease"] else "") + \
+        ("" if r["installable"] else " · can't be installed from here")
+
+
 def latest_tag(get=None, track="release"):
     """The newest build of a track, or None when GitHub did not answer. release: the latest release's tag, the API first
     (60 an hour), the setup list's tag otherwise, which is a file download and not that limit (the same fallback as the

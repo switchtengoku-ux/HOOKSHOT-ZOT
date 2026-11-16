@@ -21,7 +21,8 @@ and its scripts, Hookshot Builder and the Linux AppImage. They are built from th
 so they never carry different versions.
 
 The "public" surface the rules protect is the command line of `make_game.py` and the builder, the `RX_` and `HOS_`
-switches, the files a build writes into a game folder (`hookshot_options.ini`, `hookshot_env.txt`, `language.txt`,
+switches, the settings file (`hookshot_options.ini`, in the user folder `--user` names, else the game folder), the files a build
+writes into a game folder (`hookshot_env.txt`, `language.txt`,
 `hookshot_version.txt`), saves, and the format of `hookshot_log.txt`. The C sources and internal headers are not an
 API and may change in any release.
 

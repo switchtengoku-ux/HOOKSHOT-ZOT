@@ -34,6 +34,24 @@ static HWND g_win, g_text, g_bar;
 static wchar_t g_status[512];
 static volatile LONG g_percent = -1;
 static DWORD g_http_status;   /* (the last answer: 0 when the server was not reached) */
+static DWORD g_http_error;    /* (and then Windows' error for it: net_why) */
+#ifndef WINHTTP_OPTION_IPV6_FAST_FALLBACK
+#define WINHTTP_OPTION_IPV6_FAST_FALLBACK 140
+#endif
+/* (2026-11-15) Windows' error for a connection that got no answer, in words, so a player's screenshot says which it was: players
+   could not connect even through WARP or a VPN, and the message gave no reason */
+static const wchar_t *net_why(DWORD e) {
+    switch (e) {
+    case 12002: return L"the connection timed out";
+    case 12007: return L"the server's name could not be looked up (DNS)";
+    case 12029: return L"the connection was refused or blocked";
+    case 12030: case 12031: return L"the connection was cut";
+    case 12037: case 12038: case 12044: case 12045: case 12057: case 12157: case 12169: case 12175:
+        return L"a secure connection could not be made: an antivirus or firewall that checks HTTPS, or the PC's date and time";
+    case 12180: return L"a proxy setting could not be read";
+    default: return L"no answer";
+    }
+}
 static wchar_t g_cmdline[2048];
 static HbHome g_home;
 static int g_home_ok;
@@ -118,28 +136,36 @@ static int home_path(wchar_t *out, const wchar_t *format, ...) {
 /* ---- HTTPS GET into a sink, following redirects (GitHub's release links go to its download host) ---- */
 typedef int (*Sink)(void *user, const void *data, DWORD n);
 
-static int http_get(const char *url8, Sink sink, void *user, unsigned long long expect, const wchar_t *accept) {
+static int http_get_once(const char *url8, Sink sink, void *user, unsigned long long expect, const wchar_t *accept) {
     wchar_t url[1024];
     MultiByteToWideChar(CP_UTF8, 0, url8, -1, url, 1024);
     URL_COMPONENTS uc = {sizeof uc};
     wchar_t host[256], path[1024];
     uc.lpszHostName = host, uc.dwHostNameLength = 256;
     uc.lpszUrlPath = path, uc.dwUrlPathLength = 1024;
+    g_http_error = 0, g_http_status = 0;   /* (this request's own: a status from the one before is not this one's) */
     if (!WinHttpCrackUrl(url, 0, 0, &uc)) return 0;
     HINTERNET s = WinHttpOpen(L"HookshotBuilder-Setup/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, NULL, NULL, 0);
     if (!s) s = WinHttpOpen(L"HookshotBuilder-Setup/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
-    if (!s) return 0;
+    if (!s) return g_http_error = GetLastError(), 0;
     /* (a stalled download fails after a minute without data, with the message, instead of waiting forever: a GitHub 504 hour) */
     WinHttpSetTimeouts(s, 30000, 30000, 30000, 60000);
     DWORD policy = WINHTTP_OPTION_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP;   /* (a redirect never drops to clear text) */
     WinHttpSetOption(s, WINHTTP_OPTION_REDIRECT_POLICY, &policy, sizeof policy);
+    /* (2026-11-15) IPv4 tried at once when IPv6 does not answer, as browsers do: on a network whose IPv6 is broken (a VPN or
+       WARP that tunnels IPv4 only) the setup waited on IPv6 until its timeout while the browser loaded the same links. Windows
+       10 1903 and later; refused harmlessly before */
+    DWORD fast = 1;
+    WinHttpSetOption(s, WINHTTP_OPTION_IPV6_FAST_FALLBACK, &fast, sizeof fast);
     HINTERNET c = WinHttpConnect(s, host, uc.nPort, 0);
     LPCWSTR types[2] = {accept, NULL};
     HINTERNET r = c ? WinHttpOpenRequest(c, L"GET", path, NULL, WINHTTP_NO_REFERER, accept ? types : WINHTTP_DEFAULT_ACCEPT_TYPES,
                                          uc.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0)
                     : NULL;
     int ok = 0;
-    if (r && WinHttpSendRequest(r, WINHTTP_NO_ADDITIONAL_HEADERS, 0, NULL, 0, 0, 0) && WinHttpReceiveResponse(r, NULL)) {
+    if (!(r && WinHttpSendRequest(r, WINHTTP_NO_ADDITIONAL_HEADERS, 0, NULL, 0, 0, 0) && WinHttpReceiveResponse(r, NULL)))
+        g_http_error = GetLastError();   /* (why no answer came: net_why) */
+    else {
         DWORD code = 0, len = sizeof code;
         WinHttpQueryHeaders(r, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, NULL, &code, &len, NULL);
         g_http_status = code;
@@ -149,7 +175,7 @@ static int http_get(const char *url8, Sink sink, void *user, unsigned long long 
             ok = 1;
             for (;;) {
                 DWORD n = 0;
-                if (!WinHttpReadData(r, buf, sizeof buf, &n)) { ok = 0; break; }
+                if (!WinHttpReadData(r, buf, sizeof buf, &n)) { g_http_error = GetLastError(); ok = 0; break; }
                 if (!n) break;
                 if (!sink(user, buf, n)) { ok = 0; break; }
                 got += n;
@@ -162,6 +188,32 @@ static int http_get(const char *url8, Sink sink, void *user, unsigned long long 
     if (c) WinHttpCloseHandle(c);
     WinHttpCloseHandle(s);
     return ok;
+}
+
+/* (2026-11-15) The server's own address, not through Cloudflare and not under notrexed.dev: what the setup downloads from when
+   git.notrexed.dev gives no answer at all. Players saw "The download server didn't answer (0)" through WARP and VPNs too: an
+   antivirus's web filter (BitDefender flags the domain) or a provider blocking notrexed.dev, which a VPN does not get round
+   from inside the PC. The VPS serves the release files, the latest links and the API's latest release there itself (its
+   Caddyfile), and the setup list's part links are git.notrexed.dev's, so each request is the same path on the other host.
+   Once git.notrexed.dev gave no answer, the rest of this run asks the other host first; if that gives none either, the next
+   try goes back to git.notrexed.dev. An answer with an error status (a 404, a 5xx) is git.notrexed.dev's own: not switched */
+static const char kMainHost[] = "https://git.notrexed.dev/";
+static const char kFallbackHost[] = "https://git.13.140.227.35.sslip.io/";
+static int g_fallback;   /* (git.notrexed.dev gave no answer: its requests go to kFallbackHost first) */
+
+static int http_get(const char *url8, Sink sink, void *user, unsigned long long expect, const wchar_t *accept) {
+    const size_t main_n = sizeof kMainHost - 1;
+    if (strncmp(url8, kMainHost, main_n)) return http_get_once(url8, sink, user, expect, accept);
+    char other[2048];
+    snprintf(other, sizeof other, "%s%s", kFallbackHost, url8 + main_n);
+    for (int k = 0; k < 2; k++) {
+        const int fallback = g_fallback;
+        const int ok = http_get_once(fallback ? other : url8, sink, user, expect, accept);
+        if (ok || g_http_status) return ok;   /* (an answer, even an error: not a block) */
+        g_fallback = !fallback;   /* (no answer at all: the other host, now and for the rest of this run) */
+        if (!fallback) status(L"git.notrexed.dev did not answer: trying the server's own address");
+    }
+    return 0;
 }
 
 typedef struct { char *p; size_t n, cap; } Mem;
@@ -184,6 +236,56 @@ static int file_sink(void *u, const void *d, DWORD n) {
     DWORD w = 0;
     if (!WriteFile(s->f, d, n, &w, NULL) || w != n) return 0;
     return BCryptHashData(s->h, (PUCHAR)d, n, 0) == 0;
+}
+
+/* ---- (2026-11-15) Files the player downloaded with a browser. Players whose setup could not reach git.notrexed.dev (their
+   network, a VPN, an antivirus or proxy in the way) could still open its links in a browser, which has their proxy and VPN
+   settings, resumes a dropped download and answers Cloudflare's checks. hookshot.notrexed.dev/manual lists the latest
+   release's links: hookshot-setup.txt and each part. A file of that name in the player's Downloads folder, or beside this
+   setup, is taken in place of the download: the list only when the server did not answer, a part only when its SHA-256 is
+   the list's ---- */
+#define MANUAL_PAGE L"https://hookshot.notrexed.dev/manual"
+static int browser_file(const char *name, wchar_t *out) {
+    static const GUID downloads_id = {0x374DE290, 0x123F, 0x4565, {0x91, 0x64, 0x39, 0xC4, 0x92, 0x5E, 0x46, 0x7B}};
+    wchar_t wname[260], dirs[2][MAX_PATH];
+    MultiByteToWideChar(CP_UTF8, 0, name, -1, wname, 260);
+    int n = 0;
+    PWSTR dl = NULL;
+    if (SHGetKnownFolderPath(&downloads_id, 0, NULL, &dl) == S_OK && dl && wcslen(dl) < MAX_PATH) wcscpy(dirs[n++], dl);
+    if (dl) CoTaskMemFree(dl);
+    const DWORD len = GetModuleFileNameW(NULL, dirs[n], MAX_PATH);
+    if (len && len < MAX_PATH) {
+        wchar_t *slash = wcsrchr(dirs[n], L'\\');
+        if (slash) *slash = 0, n++;
+    }
+    /* (the newest of them: an old copy left in Downloads from an earlier install is not taken over a fresh one) */
+    int found = 0;
+    FILETIME best = {0, 0};
+    for (int i = 0; i < n; i++) {
+        wchar_t p[MAX_PATH];
+        if (_snwprintf(p, MAX_PATH, L"%ls\\%ls", dirs[i], wname) >= MAX_PATH) continue;
+        p[MAX_PATH - 1] = 0;
+        WIN32_FILE_ATTRIBUTE_DATA d;
+        if (!GetFileAttributesExW(p, GetFileExInfoStandard, &d) || (d.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+        if (!found || CompareFileTime(&d.ftLastWriteTime, &best) > 0) wcscpy(out, p), best = d.ftLastWriteTime, found = 1;
+    }
+    return found;
+}
+/* the last part of a link: the name a browser saves it under */
+static const char *link_name(const char *url) {
+    const char *q = strrchr(url, '/');
+    return q ? q + 1 : url;
+}
+/* a whole small file (the list) into m */
+static int read_whole(const wchar_t *path, Mem *m) {
+    HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (f == INVALID_HANDLE_VALUE) return 0;
+    char buf[1 << 14];
+    DWORD n;
+    int ok = 1;
+    while (ok && ReadFile(f, buf, sizeof buf, &n, NULL) && n) ok = mem_sink(m, buf, n);
+    CloseHandle(f);
+    return ok && m->p;
 }
 
 static void hex(const unsigned char *d, int n, char *out) {
@@ -702,10 +804,25 @@ static DWORD WINAPI work(LPVOID unused) {
        over ~3 minutes now, alternating the release link and the API's) */
     static const int waits[] = {3, 6, 12, 20, 30, 45, 60};
     enum { TRIES = 8 };
+    /* (a list the player saved with a browser: the server is asked once, and the saved one is taken when it does not answer) */
+    wchar_t saved_list[MAX_PATH];
+    int have_saved = browser_file("hookshot-setup.txt", saved_list);
+    if (have_saved) {   /* (one saved for this: from the last 7 days. An old one, left from an install by hand weeks ago, names
+                           an old release and links that may be gone) */
+        WIN32_FILE_ATTRIBUTE_DATA d;
+        FILETIME now;
+        GetSystemTimeAsFileTime(&now);
+        const ULONGLONG at = GetFileAttributesExW(saved_list, GetFileExInfoStandard, &d)
+            ? ((ULONGLONG)d.ftLastWriteTime.dwHighDateTime << 32) | d.ftLastWriteTime.dwLowDateTime : 0;
+        const ULONGLONG t = ((ULONGLONG)now.dwHighDateTime << 32) | now.dwLowDateTime;
+        if (!at || t - at > 7ull * 24 * 3600 * 10000000ull) have_saved = 0;
+    }
     int ok = 0;
-    for (int attempt = 0; attempt < TRIES && !ok; attempt++) {
+    for (int attempt = 0; attempt < (have_saved ? 1 : TRIES) && !ok; attempt++) {
         if (attempt) {
-            status(L"The download server didn't answer (%lu). Trying again in %d s...", g_http_status, waits[attempt - 1]);
+            if (g_http_status) status(L"The download server didn't answer (%lu). Trying again in %d s...", g_http_status, waits[attempt - 1]);
+            else status(L"The download server didn't answer (%ls, Windows error %lu). Trying again in %d s...", net_why(g_http_error),
+                        g_http_error, waits[attempt - 1]);
             Sleep(waits[attempt - 1] * 1000);
             status(L"Looking for the latest Hookshot Builder...");
         }
@@ -723,13 +840,22 @@ static DWORD WINAPI work(LPVOID unused) {
         }
         if (!ok && !retryable(g_http_status)) break;   /* (404 and the like: trying again changes nothing) */
     }
+    if (!ok && have_saved) {
+        free(man.p);
+        man = (Mem){0};
+        ok = read_whole(saved_list, &man);
+        if (ok) status(L"git.notrexed.dev did not answer: using %ls", saved_list);
+    }
+    if (!ok && !g_http_status)
+        fail(L"Could not reach git.notrexed.dev to get the Hookshot Builder: %ls (Windows error %lu).\n\nIf it keeps failing, "
+             L"download the files listed at " MANUAL_PAGE L" with your browser into your Downloads folder (or beside "
+             L"HookshotBuilder.exe), then start HookshotBuilder.exe again: it uses them.", net_why(g_http_error), g_http_error);
     if (!ok)
         fail(g_http_status == 404
                  ? L"The latest Hookshot release has no setup files yet. Download HookshotBuilder.zip from the releases page for now: "
                    L"https://git.notrexed.dev/Hookshot/Hookshot/releases/latest"
-             : g_http_status ? L"The download server is failing right now (an error 500 or above, tried 8 times over 3 minutes). "
-                               L"This is on the server's side: try again in a few minutes, or later today."
-                             : L"Could not reach git.notrexed.dev to get the Hookshot Builder. Check your internet connection and try again.");
+                 : L"The download server is failing right now (an error 500 or above, tried 8 times over 3 minutes). "
+                   L"This is on the server's side: try again in a few minutes, or later today.");
 
     char tag[128] = "", run[260] = "";
     Part parts[MAX_PARTS];
@@ -789,14 +915,28 @@ static DWORD WINAPI work(LPVOID unused) {
                 continue;
             }
             char have[65] = "";
+            /* (a part the player saved with a browser, under its link's name: copied in when its SHA-256 is the list's) */
             if (!(GetFileAttributesW(zip) != INVALID_FILE_ATTRIBUTES && file_sha256(zip, have) && !strcmp(have, p->sha))) {
+                wchar_t saved[MAX_PATH];
+                char saved_sha[65] = "";
+                if (browser_file(link_name(p->url), saved) && file_sha256(saved, saved_sha) && !strcmp(saved_sha, p->sha) &&
+                    CopyFileW(saved, zip, FALSE)) {
+                    status(L"Part %d of %d: using %ls", i + 1, nparts, saved);
+                    strcpy(have, saved_sha);
+                }
+            }
+            if (!(GetFileAttributesW(zip) != INVALID_FILE_ATTRIBUTES && (have[0] || file_sha256(zip, have)) && !strcmp(have, p->sha))) {
                 wchar_t part[MAX_PATH];
                 home_path(part, L"%ls.part", zip);
                 int got = 0;
                 for (int attempt = 0; attempt < TRIES && !got; attempt++) {   /* (a server error or a dropped connection: again) */
                     if (attempt) {
-                        status(L"Part %d of %d: the download server didn't answer (%lu). Trying again in %d s...", i + 1, nparts, g_http_status,
-                               waits[attempt - 1]);
+                        if (g_http_status)
+                            status(L"Part %d of %d: the download server didn't answer (%lu). Trying again in %d s...", i + 1, nparts,
+                                   g_http_status, waits[attempt - 1]);
+                        else
+                            status(L"Part %d of %d: the download server didn't answer (%ls, Windows error %lu). Trying again in %d s...",
+                                   i + 1, nparts, net_why(g_http_error), g_http_error, waits[attempt - 1]);
                         Sleep(waits[attempt - 1] * 1000);
                     }
                     status(L"Downloading part %d of %d (%llu MB)...", i + 1, nparts, p->size >> 20);
@@ -823,11 +963,19 @@ static DWORD WINAPI work(LPVOID unused) {
                     /* (a download cut off half way answered 200 and stopped the tries at once: only a definite no stops them) */
                     if (!got && !retryable(g_http_status)) break;
                 }
+                /* (no answer at all, status 0: the connection, not the server; why, in Windows' words) */
+                if (!got && !g_http_status)
+                    DeleteFileW(part), fail(L"Downloading part %d of %d failed: %ls (Windows error %lu).\n\nIf it keeps failing, download "
+                                            L"the files listed at " MANUAL_PAGE L" with your browser into your Downloads folder, then "
+                                            L"start HookshotBuilder.exe again: it uses them. The parts already downloaded are kept.",
+                                            i + 1, nparts, net_why(g_http_error), g_http_error);
                 if (!got) DeleteFileW(part), fail(retryable(g_http_status)
                     ? L"Downloading part %d of %d failed: the download server is failing right now (tried 8 times over 3 "
                       L"minutes). This is on the server's side. The parts already downloaded are kept: run HookshotBuilder.exe again in a "
                       L"few minutes and it carries on from here."
-                    : L"Downloading part %d of %d failed. Check your connection and free space, then try again.", i + 1, nparts);
+                    : L"Downloading part %d of %d failed. Check your connection and free space, then try again.\n\nIf it keeps "
+                      L"failing, download the files listed at " MANUAL_PAGE L" with your browser into your Downloads folder, then start "
+                      L"HookshotBuilder.exe again: it uses them.", i + 1, nparts);
                 if (strcmp(have, p->sha)) DeleteFileW(part), fail(L"Part %d of %d did not download correctly (its checksum differs). Try again.", i + 1, nparts);
                 /* (the checked file or nothing: an old <sha>.zip that could not be removed is never unpacked instead) */
                 if (!MoveFileExW(part, zip, MOVEFILE_REPLACE_EXISTING)) {

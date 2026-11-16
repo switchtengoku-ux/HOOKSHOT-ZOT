@@ -204,6 +204,10 @@ To go back, install the [latest release](https://git.notrexed.dev/Hookshot/Hooks
 - Saves: the `user` folder in the game folder on Windows, `~/.local/share/hookshot` on Linux (a `user` folder from an
   earlier Linux build is moved there once). `--user <folder>` puts them somewhere else ([command line
   arguments](#running-the-game-from-the-command-line)).
+  The game also backs your saves up outside the game folder, at each start and after it saves (the last 20, in
+  `%LOCALAPPDATA%\Hookshot\save-backups` on Windows, `~/.local/share/hookshot/save-backups` on Linux). A game folder with no
+  saves, such as a new install or one built again into another folder, gets the newest backup back at its first start; a
+  folder that has saves is never touched. To go back to an older backup, copy its `save` folder over the game's own.
   To carry on with a save from an emulator (Lichii, Eglantine, Orchid, ...) or NX2navi, or to take yours there, see
   [using a save from an emulator](docs/saves.md).
 - To uninstall, delete the game folder, the builder's folder and the shortcuts.
@@ -254,6 +258,8 @@ lists its files' checksums in `SHA256SUMS`. A copy from anywhere else may not be
 If the problem continues, [report it](https://git.notrexed.dev/Hookshot/Hookshot/issues/new/choose) with the version, where
 you were in the game, your graphics card, `hookshot_log.txt` and a screenshot or video. Never send game files. The
 in-game menu's **Gameplay → Bug report** gathers all of it in one press ([In-game menu](#in-game-menu)).
+If the game runs slowly or stutters, [report slow performance](docs/performance-report.md) shows how to have it measure
+itself first.
 
 #### Low FPS or stutter
 
@@ -346,6 +352,8 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | Fullscreen | Off, On (the same as <kbd>F11</kbd>) | Off |
 | | V-Sync | Auto, On, Off | Auto |
 | | Window scaling filter | Off, Catmull-Rom, Lanczos | Off |
+| | CRT filter | Off, Lottes aperture grille, Lottes consumer TV, Hyllian Fast, zfast CRT (changes at once; Native HDR bypasses it) | Off |
+| | CRT lines | 240, 480, 720 virtual lines (changes at once; capped at half the destination height) | 240 |
 | | Ultrawide menus | Full width; Centred, blurred sides; Centred, black bars (with the Aspect ratio at the monitor's shape) | Centred, blurred sides |
 | | HDR | Off, Expanded, Native (the game's) | Off |
 | | HDR paper white | 80 to 400 nits (while HDR is on) | 200 nits |
@@ -356,7 +364,6 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | Anisotropic filtering | Game's, 2x, 4x, 8x, 16x | 16x |
 | | GPU device | Auto, or each graphics card by name (after a restart) | Auto |
 | | Threaded rendering | Auto, On, Off (after a restart). Auto is On with 12 or more processor threads for the game | Auto |
-| | VRAM budget | Auto, 3.6, 4.8, 6, 7.5, 9, 11 GB (2.2 GB only from the Minimum (4GB) preset); a quality preset sets it | Auto |
 | Audio | Volume | 0 to 100%, in steps of 5 | 100% |
 | | Music volume | 0 to 150%, in steps of 5 (Hookshot Enhanced: the music against the rest) | 100% |
 | | Effects volume | 0 to 150%, in steps of 5 (Hookshot Enhanced: everything but the music) | 100% |
@@ -880,8 +887,8 @@ license. Never share a game folder built with them, and do not post builds made 
   run the build with `HOOKSHOT_NGX_SDK=<sdk folder>` set: `make_game.py` puts both runtimes in the game folder's `ngx`
   folder. NGX's core comes with NVIDIA's Linux driver.
 - **Linux, a game folder with other than plain English letters in its path:** NVIDIA's NGX on Linux loads DLSS's
-  runtimes only from a folder whose whole path is ASCII. A game in `~/Games/Zelda` needs nothing more. A game in a
-  folder such as `~/Games/Zelda-Café` (the `é` is not ASCII) cannot use the runtimes in its own `ngx` folder, and the
+  runtimes only from a folder whose whole path is ASCII. A game in `~/Games/Hookshot` needs nothing more. A game in a
+  folder such as `~/Games/Hookshot-Café` (the `é` is not ASCII) cannot use the runtimes in its own `ngx` folder, and the
   log and the Insert menu say so: copy `libnvidia-ngx-dlss.so.*` and `libnvidia-ngx-dlssg.so.*` from there into
   `$XDG_DATA_HOME/hookshot/ngx`
   (`~/.local/share/hookshot/ngx`), which the game also looks in, or into any other folder with an ASCII path and name
@@ -1012,7 +1019,7 @@ The switches for scripted test runs, screenshots, frame dumps and profiles are i
 [development guide](docs/development.md#switches-for-testing-and-debugging).
 
 `RX_VK_WB_MAX_KB=<KB>` (off by default; 1024 is the tested value) is the size from which a written GPU binding may go
-without most of its write-back. OoT
+without most of its write-back. The game
 writes tens of MB of culling lists and per-frame buffers through the GPU that the CPU never reads, and copying them back
 sat on every submit's memory sync: in Hyrule Field on a 10 GB RTX 3080, about 66 MB and 4.4 ms a submit, holding the
 scene at 45-48 fps. The CPU does read and write parts of some large ones, so a binding over the size is written back
@@ -1097,7 +1104,7 @@ Hookshot exists thanks to the work of many people:
 - **[kinnay/zbic](https://github.com/kinnay/zbic)**, **Opus** and **SDL**: decompression, audio and controllers.
 - **[sostenesfreitas/ocarina-recomp](https://github.com/sostenesfreitas/ocarina-recomp)**: this README's layout, and its notes
   confirmed the mesh stage's control section.
-- **[MythosOfs/Orchid](https://github.com/MythosOfs/Orchid)**: the fog and exposure workaround Ocarina of Time used before
+- **[MythosOfs/Orchid](https://github.com/MythosOfs/Orchid)**: the fog and exposure workaround the game used before
   its fog and lighting were fixed.
 - **Mesa (NAK)**: the reference for Ampere's instruction encoding.
 - Everyone who sent fixes: SkippySteve (Linux and the AppImage, and many more), monsterlag, klimovich008, hckrman101 (NVIDIA

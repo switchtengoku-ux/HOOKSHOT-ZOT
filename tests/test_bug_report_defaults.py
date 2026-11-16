@@ -36,14 +36,14 @@ def fixture(source):
     tabs = re.search(r"enum MenuTab \{.*?\};", menu, re.S).group()
     names = dict((member, name) for name, member in re.findall(r'\{TAB_\w+, "([^"]+)", &opts\.(\w+),', menu))
     controls = "\n".join(definition(menu, signature) for signature in (
-        "void apply_preset", "void apply_auto", "void sync_preset_budgets", "void vram_budget_sync"))
+        "void apply_preset", "void apply_auto"))
     auto_members = sorted(set(re.findall(r"opts\.(\w+)\s*=", controls)) & names.keys())
     text_functions = {
         "ultrawide": "tx_ultrawide", "output_res": "tx_output_res", "resolution": "tx_resolution",
         "dlss": "tx_upscaler", "dlss_model": "tx_dlss_model", "preset": "tx_preset", "gpu_device": "tx_gpu", "mic": "tx_mic",
     }
     # (the rows a preset sets whose texts are fixed: the built-in defaults for a Custom player Auto never chose for)
-    preset_rows = ["sharpness", "pace", "realtime", "handheld", "vram_budget"]
+    preset_rows = ["sharpness", "pace", "realtime", "handheld"]
     members = list(dict.fromkeys(["ultrawide", "output_res", "resolution", "dlss", *auto_members, *preset_rows,
                                  "framegen_by", "game_lang", "dlss_model", "gpu_device", "mic", "fov"]))
     rows = "\n".join('    {TAB_GRAPHICS, "%s", &opts.%s, 0, 100, 1, %s, nullptr},' %
@@ -175,7 +175,7 @@ int main(int argc, char** argv) {
     } else if (which == "auto-profile") {
         opts.preset = 6; opts.dlss = ur::DLSS; opts.resolution = 3;
         opts.output_res = parse_output("1920x1080"); opts.upscale = 2;
-        opts.sharpness = 50; opts.pace = 1; opts.handheld = 0; opts.vram_budget = 7;
+        opts.sharpness = 50; opts.pace = 1; opts.handheld = 0;
     } else if (which == "stable-sentinels") {
         opts.gpu_device = 1; opts.mic = 2; opts.fov = 110;
     } else if (which == "model-env" || which == "model-fixed") {

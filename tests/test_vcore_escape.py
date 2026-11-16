@@ -52,6 +52,12 @@ enum { HOS_CHAIN_WAIT = 1, HOS_CHAIN_WOKE, HOS_CHAIN_SIGNAL, HOS_CHAIN_SLEEP, HO
 static int escapes_logged;
 static void hos_log(const char *fmt, ...) { if (strstr(fmt, "ran without a core")) escapes_logged++; }
 static int hos_cores(void) { return 2; }
+/* (the processors' topology, for the background threads' cap (HOS_BG_CAP=auto, off here): none known) */
+typedef enum { RelationProcessorCore } LOGICAL_PROCESSOR_RELATIONSHIP;
+typedef struct { LOGICAL_PROCESSOR_RELATIONSHIP Relationship; } SYSTEM_LOGICAL_PROCESSOR_INFORMATION;
+static BOOL GetLogicalProcessorInformation(SYSTEM_LOGICAL_PROCESSOR_INFORMATION *info, DWORD *len) { (void)info, (void)len; return 0; }
+static int hos_reserved_cpus(void) { return 0; }
+static int env_on(const char *name) { const char *e = getenv(name); return e && *e && *e != '0'; }   /* (hookshot_env.h's rule, in short) */
 static int sleeps;
 /* (no other thread runs here: a wait for a core only lets the clock go on, 1 ms a look, as the real one times out) */
 static BOOL SleepConditionVariableSRW(PCONDITION_VARIABLE cv, PSRWLOCK lk, DWORD ms, unsigned long f) {

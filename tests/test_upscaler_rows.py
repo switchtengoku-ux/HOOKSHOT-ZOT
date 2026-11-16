@@ -135,7 +135,7 @@ def main():
     if "return !fsr3_on_chain() && fsr3_chosen();" not in function(fsr3, "bool fsr3_wanted() {"):
         raise SystemExit("fsr3_wanted: FSR 3.1 would upscale with its own inputs while it draws on the chain (two upscales)")
     on_chain = "if (fsr3_on_chain() && fsr3_chosen()) return ur::FSR3;"
-    if on_chain not in mode or mode.index(on_chain) > mode.index("if (!ur::is_dlss(v) && !ur::is_fsr4(v)) return ur::GAME;"):
+    if on_chain not in mode or mode.index(on_chain) > mode.index("if (!ur::is_dlss(v) && !ur::is_fsr4(v) && !ur::is_xess(v)) return ur::GAME;"):
         raise SystemExit("temporal_mode does not run the row's FSR 3.1 on the chain before falling back to the game's own")
     if "fsr3_engine()" not in function(temporal, "Engine& engine_of("):
         raise SystemExit("engine_of has no slot for FSR 3.1's engine")

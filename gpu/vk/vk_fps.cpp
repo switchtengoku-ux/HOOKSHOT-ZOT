@@ -30,8 +30,14 @@ struct ThreadTimes {
     int64_t wait[fs::kParts] = {};
     int64_t waits = 0;    // (every wait: what an entry takes out)
     int depth = 0;        // (entries open: only the outermost counts)
+    bool presenter = false;          // (the thread that presents, whose frame is split)
+    int gpu_kind = fs::kGpuWait;     // (what a GPU wait on it is now, FpsFenceWait)
 };
 thread_local ThreadTimes tt;
+std::atomic<int64_t> other_wait[2];   // (the fence waits of the game's other threads, kWaitRender and kWaitGpu)
+std::atomic<int64_t> rt_wait[fs::kRtParts];   // (the render thread's waits by kind)
+std::atomic<bool> rt_running{false};
+thread_local bool on_render_thread = false;
 
 std::mutex ring_mu;
 fs::Ring<fs::kRing> ring;
@@ -40,8 +46,22 @@ fs::Ring<fs::kRing> ring;
 
 int64_t fps_clock() { return prof_now(); }
 
+int fps_gpu_wait_kind() { return tt.gpu_kind; }
+void fps_render_thread() { on_render_thread = true, rt_running.store(true); }
+bool fps_render_thread_on() { return rt_running.load(std::memory_order_relaxed); }
+FpsRtWait::FpsRtWait(int k) : kind(k), t0(on_render_thread && fps_breakdown_on() ? fps_clock() : 0) {}
+FpsRtWait::~FpsRtWait() {
+    if (t0 && kind > fs::kRtWork && kind < fs::kRtParts) rt_wait[kind].fetch_add(fps_clock() - t0, std::memory_order_relaxed);
+}
+FpsFenceWait::FpsFenceWait(bool recorded) : saved(tt.gpu_kind) { tt.gpu_kind = recorded ? fs::kWaitGpu : fs::kWaitRender; }
+FpsFenceWait::~FpsFenceWait() { tt.gpu_kind = saved; }
+
 void fps_wait(int part, int64_t ns) {
     if (ns <= 0 || part < 0 || part >= fs::kParts) return;
+    if ((part == fs::kWaitRender || part == fs::kWaitGpu) && !tt.presenter) {
+        other_wait[part == fs::kWaitGpu].fetch_add(ns, std::memory_order_relaxed);
+        return;
+    }
     tt.wait[part] += ns;
     tt.waits += ns;
 }
@@ -61,6 +81,8 @@ void fps_presented() {
     static int64_t last_at = 0, last_render = 0, last_wait[fs::kParts] = {}, last_slept[2] = {}, last_gpu = 0, last_pipes = 0,
                    last_left = 0, last_slot = 0;
     static int last_level = 0;
+    static int64_t last_other[2] = {}, last_rt[fs::kRtParts] = {};
+    tt.presenter = true;
     {   // (the host times its sleeps only while the Breakdown shows: told when that changes)
         static int told = 0;
         const int on = level >= fs::kBreakdown;
@@ -92,8 +114,19 @@ void fps_presented() {
             const double slots = d(slot, last_slot);
             fs::split(f, ms, d(tt.render, last_render) - slots,
                       d(tt.wait[fs::kGpuWait], last_wait[fs::kGpuWait]) + d(slept[0], last_slept[0]) + slots,
-                      d(tt.wait[fs::kPace], last_wait[fs::kPace]) + d(slept[1], last_slept[1]));
+                      d(tt.wait[fs::kPace], last_wait[fs::kPace]) + d(slept[1], last_slept[1]),
+                      d(tt.wait[fs::kWaitRender], last_wait[fs::kWaitRender]), d(tt.wait[fs::kWaitGpu], last_wait[fs::kWaitGpu]),
+                      d(other_wait[0].load(std::memory_order_relaxed), last_other[0]),
+                      d(other_wait[1].load(std::memory_order_relaxed), last_other[1]));
             f.gpu_ms = (float)d(gpu, last_gpu);
+            if (rt_running.load(std::memory_order_relaxed)) {   // (the render thread's frame over the same span)
+                double waits = 0;
+                for (int k = fs::kRtWorkers; k < fs::kRtParts; k++)
+                    waits += f.rt[k] = (float)std::min(ms, d(rt_wait[k].load(std::memory_order_relaxed), last_rt[k]));
+                const double scale = waits > ms && waits > 0 ? ms / waits : 1.0;
+                for (int k = fs::kRtWorkers; k < fs::kRtParts; k++) f.rt[k] = (float)(f.rt[k] * scale);
+                f.rt[fs::kRtWork] = (float)std::max(0.0, ms - waits * scale);
+            }
             f.pipelines = (uint16_t)std::clamp<int64_t>(pipes - last_pipes, 0, 65535);
             f.left_out = (uint16_t)std::clamp<int64_t>(left - last_left, 0, 65535);
         }
@@ -105,6 +138,8 @@ void fps_presented() {
     last_at = now, last_level = level;
     last_render = tt.render, last_gpu = gpu, last_pipes = pipes, last_left = left, last_slot = slot;
     for (int p = 0; p < fs::kParts; p++) last_wait[p] = tt.wait[p];
+    last_other[0] = other_wait[0].load(std::memory_order_relaxed), last_other[1] = other_wait[1].load(std::memory_order_relaxed);
+    for (int k = 0; k < fs::kRtParts; k++) last_rt[k] = rt_wait[k].load(std::memory_order_relaxed);
     last_slept[0] = slept[0], last_slept[1] = slept[1];
 }
 
@@ -113,12 +148,12 @@ fs::Summary fps_summary(int64_t now, int64_t window, int64_t low_window) {
     return fs::summarize(ring, now, window, low_window);
 }
 
-float fps_graph(int64_t now, int count, fs::Frame* frames, bool* marks) {
+float fps_graph(int64_t now, int count, fs::Frame* frames, bool* marks, double* scroll) {
     static thread_local int idx[512];
     count = std::min(count, 512);
     float slowest = 0;
     std::lock_guard lk(ring_mu);
-    fs::columns(ring, now, fs::kGraphWindow, count, idx, marks);
+    fs::columns(ring, now, fs::kGraphWindow, count, idx, marks, scroll);
     for (int c = 0; c < count; c++) {
         frames[c] = idx[c] >= 0 ? ring.back(idx[c]) : fs::Frame{};
         slowest = std::max(slowest, frames[c].ms);

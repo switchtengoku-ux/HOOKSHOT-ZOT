@@ -27,6 +27,8 @@ def main():
                               str(int("AcquireSRWLockExclusive" in block(host, "int hos_dlss_jitter_clip("))))
     if "MkwVkJitter temporal_jitter_sample()" in dlss:
         reader = block(dlss, "MkwVkJitter temporal_jitter_sample()") + "\n" + block(dlss, "uint32_t temporal_jitter_size(int axis)")
+        if "int slot_of(int mode)" in dlss:   # (the engine's slot, which the reader's failure gate is read from)
+            reader = block(dlss, "int slot_of(int mode)") + "\n" + reader
         producer = re.search(r"s\.jitter\.publish\([^;]+;", dlss).group()
         fr = block(fsr, "MkwVkJitter jitter_sample()") + "\n" + block(fsr, "uint32_t jitter_size(int axis)")
         callback = block(replay, "void jitter_sample(MkwVkJitter* out)")

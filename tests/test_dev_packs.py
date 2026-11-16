@@ -43,7 +43,7 @@ def test_route():
     check("a host change builds the game", r(["host/hos_thread.c"]) == "game")
     check("a game patch builds the game", r(["nx2/oot_patches.py"]) == "game")
     check("a renderer file and a host file build the game (both modules)", r(["gpu/vk/vk_draw.cpp", "host/nvn_native.c"]) == "game")
-    check("the WebGPU renderer is in the game", r(["gpu/render/x.c"]) == "game")
+    check("gpu/render (the op stream host/ includes) builds the game", r(["gpu/render/x.h"]) == "game")
     check("a build script builds the game", r(["nx2/build.py"]) == "game")
     check("docs and tests build nothing", r(["docs/development.md", "tests/test_a.py", "README.md"]) is None)
     check("an unknown path builds the game", r(["somewhere/new.c"]) == "game")

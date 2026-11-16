@@ -27,6 +27,8 @@
 #include "vk_fsr3fi.h"
 #include "vk_menu.h"
 #include "vk_present_rect.h"
+#include "crt_policy.h"
+#include "vk_gprof.h"
 #include "vk_texture.h"
 
 #include "shaders/fg_copy_comp_spv.h"
@@ -37,6 +39,10 @@
 #include "shaders/fg_scale_pq_comp_spv.h"   // (fg_scale.comp with FG_SCALE_PQ: an RGB10A2 destination)
 #include "shaders/fg_synth_comp_spv.h"
 #include "shaders/hdr_encode_comp_spv.h"
+#include "shaders/crt_downsample_comp_spv.h"
+#include "shaders/crt_lottes_comp_spv.h"
+#include "shaders/crt_hyllian_comp_spv.h"
+#include "shaders/crt_zfast_comp_spv.h"
 #ifndef HOOKSHOT_ENV_H   // (env_on: the switches' one rule)
 #include "hookshot_env.h"
 #endif
@@ -114,6 +120,7 @@ struct ScaleState {
     Img cropped, scaled, small;   // (small: the picture at 1/8, for ultrawide's blurred menu sides)
     uint32_t cropped_w = 0, cropped_h = 0, scaled_w = 0, scaled_h = 0, small_w = 0, small_h = 0;
     bool pq = false;        // (the images above are RGB10A2, for pq, else RGBA8)
+    VkImageView output_view = VK_NULL_HANDLE;   // the final scale/CRT image, also read by HDR expansion
 } scale;
 
 struct HdrState {   // (hookshot) the HDR10 pass (framegen_hdr)
@@ -414,6 +421,103 @@ void pass(VkCommandBuffer cmd, const Pipe& p, std::initializer_list<std::pair<Vk
     full_barrier(cmd);
 }
 
+// The fixed CRT profiles need no history or LUTs. Only the selected pipeline is made, and no CRT
+// resource is touched while Off (including the normal direct-present path).
+struct CrtState {
+    bool init = false, failed = false;
+    bool tried[3] = {};
+    Pipe downsample, filter[3];
+    VkSampler nearest = VK_NULL_HANDLE, linear = VK_NULL_HANDLE;
+    Img raster, output;
+    uint32_t rw = 0, rh = 0, w = 0, h = 0;
+} crt;
+
+bool init_crt(int filter) {
+    const VkDescriptorType S = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, I = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    if (!crt.init) {
+        crt.init = crt.failed = true;
+        VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+        si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+        si.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+        si.maxLod = 0.0f;
+        if (dev.push_descriptor && vkCmdPushDescriptorSetKHR &&
+            make_pipe(crt.downsample, CRT_DOWNSAMPLE_COMP_SPV, sizeof CRT_DOWNSAMPLE_COMP_SPV, {S, I}, 0)) {
+            if (vkCreateSampler(dev.device, &si, nullptr, &crt.nearest) != VK_SUCCESS) {
+                crt.nearest = VK_NULL_HANDLE;
+            } else {
+                si.magFilter = si.minFilter = VK_FILTER_LINEAR;
+                if (vkCreateSampler(dev.device, &si, nullptr, &crt.linear) == VK_SUCCESS) crt.failed = false;
+                else crt.linear = VK_NULL_HANDLE;
+            }
+        }
+        if (crt.failed) {
+            drop_pipe(crt.downsample);
+            if (crt.nearest) vkDestroySampler(dev.device, crt.nearest, nullptr);
+            if (crt.linear) vkDestroySampler(dev.device, crt.linear, nullptr);
+            crt.nearest = crt.linear = VK_NULL_HANDLE;
+            logf("vk: CRT filter unavailable: its pipeline or samplers could not be made; the unfiltered picture is kept");
+        }
+    }
+    if (crt.failed) return false;
+    if (!crt.tried[filter]) {
+        crt.tried[filter] = true;
+        const uint32_t* code[] = {CRT_LOTTES_COMP_SPV, CRT_HYLLIAN_COMP_SPV, CRT_ZFAST_COMP_SPV};
+        const size_t bytes[] = {sizeof CRT_LOTTES_COMP_SPV, sizeof CRT_HYLLIAN_COMP_SPV, sizeof CRT_ZFAST_COMP_SPV};
+        if (!make_pipe(crt.filter[filter], code[filter], bytes[filter], {S, I}, 36))
+            logf("vk: CRT filter unavailable: shader %d could not be made; the unfiltered picture is kept", filter);
+    }
+    return crt.filter[filter].pipe != VK_NULL_HANDLE;
+}
+
+VkImage record_crt(VkCommandBuffer cmd, VkImageView src, uint32_t sw, uint32_t sh, uint32_t dw, uint32_t dh,
+                   VkImageView& output_view) {
+    const int mode = opts.crt_filter;
+    const auto raster = crt_policy::raster(dw, dh, opts.crt_lines);
+    const int filter = mode <= 2 ? 0 : mode - 2;
+    if (!src || !sw || !sh || !raster.w || !raster.h || !init_crt(filter)) return VK_NULL_HANDLE;
+    if (crt.rw != raster.w || crt.rh != raster.h || crt.w != dw || crt.h != dh) {
+        {
+            std::lock_guard qk(dev.present_mu);
+            device_wait_idle_locked();
+        }
+        drop_img(crt.raster);
+        drop_img(crt.output);
+        crt.rw = crt.rh = crt.w = crt.h = 0;
+        const VkImageUsageFlags sampled = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        if (!make_img(crt.raster, raster.w, raster.h, VK_FORMAT_R8G8B8A8_UNORM, sampled) ||
+            !make_img(crt.output, dw, dh, VK_FORMAT_R8G8B8A8_UNORM, sampled | VK_IMAGE_USAGE_TRANSFER_SRC_BIT)) {
+            drop_img(crt.raster);
+            drop_img(crt.output);
+            crt.failed = true;
+            logf("vk: CRT filter unavailable: its images could not be made; the unfiltered picture is kept");
+            return VK_NULL_HANDLE;
+        }
+        crt.rw = raster.w, crt.rh = raster.h, crt.w = dw, crt.h = dh;
+        to_general(cmd, crt.raster.image);
+        to_general(cmd, crt.output.image);
+    }
+    const char* labels[] = {"", "crt-lottes-aperture", "crt-lottes-tv", "crt-hyllian", "crt-zfast"};
+    GprofSpan timing(cmd, labels[mode]);   // existing opt-in GPU counters; no timestamp queries unless requested
+    // Reduce the finished picture, not the 3D before its temporal upscaler. Area weights avoid aliasing
+    // high-resolution detail into the deliberately low-resolution tube raster.
+    pass(cmd, crt.downsample, {{src, crt.nearest}, {crt.raster.view, VK_NULL_HANDLE}}, raster.w, raster.h);
+    const struct { float source[4], output[4]; uint32_t style; } pc{
+        {(float)raster.w, (float)raster.h, 1.0f / raster.w, 1.0f / raster.h},
+        {(float)dw, (float)dh, 1.0f / dw, 1.0f / dh}, (uint32_t)mode};
+    static_assert(sizeof pc == 36);
+    pass(cmd, crt.filter[filter], {{crt.raster.view, mode == 4 ? crt.linear : crt.nearest},
+                                  {crt.output.view, VK_NULL_HANDLE}}, dw, dh, &pc, sizeof pc);
+    static int last_mode = 0;
+    static uint32_t last_w = 0, last_h = 0, last_lines = 0;
+    if (last_mode != mode || last_w != dw || last_h != dh || last_lines != raster.h) {
+        logf("vk: CRT %s: %ux%u virtual raster, %ux%u output; after scaling, before Hookshot overlays",
+             labels[mode], raster.w, raster.h, dw, dh);
+        last_mode = mode, last_w = dw, last_h = dh, last_lines = raster.h;
+    }
+    output_view = crt.output.view;
+    return crt.output.image;
+}
+
 // (hookshot) The display thread's wait for a frame's time, on a high-resolution timer. sleep_for rests on the system timer,
 // whose 1 ms (timeBeginPeriod) Windows 11 does not keep for a process whose window it takes as unseen: with the presents
 // no longer blocking (a present queue of their own) the thread slept before most frames and woke up to 20 ms after their time.
@@ -649,8 +753,10 @@ VkImage framegen_scale(VkCommandBuffer cmd, VkImageView src, VkImage image, uint
     // (a picture larger than the window takes the pass even with the filter Off: the blit's linear filter reads 2 x 2 of the
     // picture whatever the shrink, and fine detail shimmered)
     const bool shrink = source.w > dw || source.h > dh;
-    if (!opts.upscale && !opts.sharpness && !wide.side && !wide.cover && !shrink) return VK_NULL_HANDLE;
-    if (!init_scale()) return VK_NULL_HANDLE;
+    const bool scaling = opts.upscale || opts.sharpness || wide.side || wide.cover || shrink;
+    const bool tube = crt_policy::enabled(opts.crt_filter, pq);
+    if (!scaling && !tube) return VK_NULL_HANDLE;
+    if (scaling && !init_scale()) return VK_NULL_HANDLE;
     // (pq: the game's own HDR10 picture (Native HDR), PQ codes in RGB10A2. Scaled into RGB10A2 images by fg_scale_pq: through
     // the RGBA8 ones its codes lost two bits, banding in the dark. Without that pass it is shown unscaled. The images made for
     // the other format are made again)
@@ -703,6 +809,9 @@ VkImage framegen_scale(VkCommandBuffer cmd, VkImageView src, VkImage image, uint
         full_barrier(cmd);
         src = scale.cropped.view;
     }
+    // With no window effect, the CRT itself maps the finished game image to the output pixel grid.
+    // Avoid an otherwise redundant full-size scale image and dispatch.
+    if (!scaling) return record_crt(cmd, src, source.w, source.h, dw, dh, scale.output_view);
     if (scale.scaled_w != dw || scale.scaled_h != dh) {
         {
             std::lock_guard qk(dev.present_mu);   // (the queue is idle only while nothing else submits to it)
@@ -755,10 +864,13 @@ VkImage framegen_scale(VkCommandBuffer cmd, VkImageView src, VkImage image, uint
              opts.upscale, opts.sharpness, sw, sh, crop ? crop[0] : 0, crop ? crop[1] : 0,
              crop ? crop[2] : (int)sw, crop ? crop[3] : (int)sh, dw, dh);
     }
+    if (tube)
+        if (const VkImage filtered = record_crt(cmd, scale.scaled.view, dw, dh, dw, dh, scale.output_view)) return filtered;
+    scale.output_view = scale.scaled.view;
     return scale.scaled.image;
 }
 
-VkImageView framegen_scaled_view() { return scale.scaled.view; }
+VkImageView framegen_scaled_view() { return scale.output_view; }
 
 /// (hookshot) The Insert menu's HDR: src's crop to a dw x dh HDR10 image (PQ, Rec. 2020, 10 bits), to be copied into an HDR10
 /// swapchain's image as the SDR picture is (shaders/hdr_encode.comp); null when it cannot be made (then the SDR picture;

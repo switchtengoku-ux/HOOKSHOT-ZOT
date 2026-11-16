@@ -1064,6 +1064,7 @@ class HookshotCtl(unittest.TestCase):
     def test_input_waits_as_long_as_the_bridge(self):
         # (without --timeout the bridge's default holds: 30 s plus the input's frames at 10 fps. The client waited 70 s
         # for any reply and gave up on long inputs the game was still pressing)
+        from unittest import mock
         m = client_module()
         waits = []
 
@@ -1079,10 +1080,55 @@ class HookshotCtl(unittest.TestCase):
                 return {"id": self.sent["id"], "ok": True}
 
         b = Fake()
-        b.request("stick", stick="L", x=0, y=1, frames=36000)
-        b.request("status")
-        b.request("press", timeout=5, buttons="A")
+        with mock.patch.object(m.time, "monotonic", return_value=100.0):   # (no time passes: each wait is the whole one)
+            b.request("stick", stick="L", x=0, y=1, frames=36000)
+            b.request("status")
+            b.request("press", timeout=5, buttons="A")
         self.assertEqual(waits, [3610, 70, 15])
+
+    def test_reply_wait_ends_at_its_deadline_while_events_arrive(self):
+        # (each event line started the whole wait again: a tool subscribed to present events, whose command's reply
+        # never came, waited for ever)
+        from unittest import mock
+        m = client_module()
+        clock = [0.0]
+
+        def bridge(lines):
+            class Fake(m.Bridge):
+                def __init__(self):
+                    self.next_id, self.pending, self.sock, self.waits = 0, b"", None, []
+
+                def send(self, obj):
+                    self.sent = obj
+
+                def line(self, timeout):
+                    self.waits.append(timeout)
+                    if not lines or lines[0][0] > clock[0] + timeout:
+                        clock[0] += timeout
+                        raise m.Failed("no answer from the game in %.0f s" % timeout, 3)
+                    at, msg = lines.pop(0)
+                    clock[0] = max(clock[0], at)
+                    return msg(self.sent["id"]) if callable(msg) else msg
+            return Fake()
+
+        event = {"event": "present", "frame": 1}
+        with mock.patch.object(m.time, "monotonic", side_effect=lambda: clock[0]):
+            clock[0] = 0.0
+            b = bridge([(t, event) for t in range(5, 200, 5)])   # (an event every 5 s, no reply)
+            with self.assertRaises(m.Failed) as failed:
+                b.request("status")
+            self.assertEqual(failed.exception.code, 3)
+            self.assertLessEqual(clock[0], 70)   # (status: 60 s and 10 more, from the request)
+            self.assertIn("70 s", str(failed.exception))
+            clock[0] = 0.0
+            b = bridge([(t, event) for t in range(5, 65, 5)] + [(69, lambda rid: {"id": rid, "ok": True})])
+            self.assertTrue(b.request("status")["ok"])   # (a reply just before the deadline is taken)
+            clock[0] = 0.0
+            b = bridge([(t, event) for t in range(1, 10)])
+            with self.assertRaises(m.Failed) as failed:
+                b.request("status", reply_timeout=3)
+            self.assertEqual(failed.exception.code, 3)
+            self.assertLessEqual(clock[0], 3)
 
     def test_shot(self):
         path = os.path.join(self.dir, "out.png")

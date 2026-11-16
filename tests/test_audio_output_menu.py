@@ -35,8 +35,7 @@ bool screen_size(uint32_t*, uint32_t*) { return false; }
 bool host_screen_size(uint32_t*, uint32_t*) { return false; }
 
 using DWORD = unsigned long;
-constexpr int MAX_PATH = 260;
-static DWORD hos_game_path_a(char *path, DWORD size) { return snprintf(path, size, "./hookshot.exe"); }
+static const char *hos_options_file() { return "./hookshot_options.ini"; }   // (host/options_path.c: the user folder's)
 static char logged[256];
 static void hos_log(const char *format, ...) {
     va_list args;

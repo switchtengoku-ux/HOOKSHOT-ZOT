@@ -3,8 +3,9 @@ run held private commit at the VRAM blocks plus ~21 GB the whole way, and a 16 G
 limit at 33.9 GB of its own. A guest commit then failed while an area loaded and the game's next write there crashed it.
 
 Checked here:
-- the textures' budget has a commit rule: below RX_VK_COMMIT_RESERVE_MB of headroom (GlobalMemoryStatusEx's ullAvailPageFile,
-  Windows only) the shortfall comes off the budget and the rule's budget, as the driver's limit's excess does;
+- the textures' budget has a commit rule: below RX_VK_COMMIT_RESERVE_MB of headroom (GlobalMemoryStatusEx's ullAvailPageFile
+  and what the page files can still grow by, tests/test_commit_room.py; Windows only) the shortfall comes off the budget and
+  the rule's budget, as the driver's limit's excess does;
 - hos_commit and the first-touch handler wait at the commit limit (1455) and commit again before they give up, and they log a
   failure the same way (commit_refused: the out-of-memory notice).
 - the first-touch handler tries a page another thread committed again on Windows only (#ifdef _WIN32): on Linux every fault in
@@ -64,7 +65,8 @@ def main():
         raise SystemExit("FAIL: the first-touch handler does not wait at the commit limit")
     # (the retry of a page another thread committed is Windows' only: on Linux the VirtualQuery stand-in calls every guest page
     # committed and read-write and the signal handler never sets 8, so every fault in the window would be tried again forever)
-    retry = "if (mbi.State == MEM_COMMIT && mbi.Protect == PAGE_READWRITE && rec->ExceptionInformation[0] != 8)"
+    # (read-write, or read-write-execute: hos_commit's commit_marks make one page every 64 MB of a commit RWX)
+    retry = "if (mbi.State == MEM_COMMIT && (mbi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)) &&"
     if touch.count(retry) != 1:
         raise SystemExit("FAIL: the first-touch handler does not retry a page another thread committed (not an execute fault)")
     head, tail = touch[:touch.index(retry)], touch[touch.index(retry):]

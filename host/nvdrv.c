@@ -150,19 +150,28 @@ void hos_gpu_track(uint64_t guest, uint64_t size, int on) {
     LOCK();
     if (on) map_add(guest, size, guest);
     else map_remove(guest);
-    int i = 0;
-    while (i < ntracked && (tracked[i].lo != lo || tracked[i].hi != hi)) i++;
+    /* (hookshot) kept sorted by (lo, hi): found by bisection, and hos_gpu_guest_ranges merges it without sorting */
+    int l = 0, r = ntracked;
+    while (l < r) {
+        const int m = (l + r) / 2;
+        if (tracked[m].lo < lo || (tracked[m].lo == lo && tracked[m].hi < hi)) l = m + 1;
+        else r = m;
+    }
+    const int i = l, found = i < ntracked && tracked[i].lo == lo && tracked[i].hi == hi;
     if (on) {
-        if (i < ntracked) tracked[i].n++;
+        if (found) tracked[i].n++;
         else {
             if (ntracked == captracked) {
                 captracked = captracked ? captracked * 2 : 256;
                 tracked = (Tracked *)realloc(tracked, (size_t)captracked * sizeof *tracked);
             }
-            tracked[ntracked++] = (Tracked){lo, hi, 1};
+            memmove(&tracked[i + 1], &tracked[i], (size_t)(ntracked - i) * sizeof *tracked);
+            tracked[i] = (Tracked){lo, hi, 1};
+            ntracked++;
         }
-    } else if (i < ntracked && --tracked[i].n <= 0) {
-        tracked[i] = tracked[--ntracked];
+    } else if (found && --tracked[i].n <= 0) {
+        memmove(&tracked[i], &tracked[i + 1], (size_t)(ntracked - i - 1) * sizeof *tracked);
+        ntracked--;
     }
     maps_changed = 1;
     InterlockedIncrement(&maps_generation);
@@ -187,12 +196,34 @@ int hos_gpu_guest_ranges(uint64_t (*out)[2], int max) {
             capmerged = nall + 64;
             merged = (uint64_t (*)[2])realloc(merged, (size_t)capmerged * sizeof *merged);
         }
-        for (int i = 0; i < nmaps; i++) {
-            merged[i][0] = maps[i].guest & ~0xFFFULL;
-            merged[i][1] = (maps[i].guest + maps[i].size + 0xFFF) & ~0xFFFULL;
+        /* (hookshot) the GPU mappings come sorted by VA, which is their guest order when each maps its own address (the
+           native NVN pools): the tracked pools alone are sorted, then the two lists merged. A qsort of all of them ran
+           on the game's main thread at every submit after a pool came or went (OoT's change every frame): qsort and its
+           comparator were the main thread's busiest host code when it ran alone. Other mappings: qsort as before */
+        static uint64_t (*side)[2];
+        static int capside;
+        if (capside < nall) {
+            capside = nall + 64;
+            side = (uint64_t (*)[2])realloc(side, (size_t)capside * sizeof *side);
         }
-        for (int i = 0; i < ntracked; i++) merged[nmaps + i][0] = tracked[i].lo, merged[nmaps + i][1] = tracked[i].hi;
-        qsort(merged, (size_t)nall, sizeof *merged, cmp_range);
+        int sorted = 1;
+        for (int i = 0; i < nmaps; i++) {
+            side[i][0] = maps[i].guest & ~0xFFFULL;
+            side[i][1] = (maps[i].guest + maps[i].size + 0xFFF) & ~0xFFFULL;
+            if (i && side[i][0] < side[i - 1][0]) sorted = 0;
+        }
+        for (int i = 0; i < ntracked; i++) side[nmaps + i][0] = tracked[i].lo, side[nmaps + i][1] = tracked[i].hi;
+        if (sorted) {   /* (the tracked pools are kept sorted: hos_gpu_track) */
+            int a = 0, b = nmaps, k = 0;
+            while (a < nmaps || b < nall) {
+                const int take_a = b >= nall || (a < nmaps && side[a][0] <= side[b][0]);
+                const int from = take_a ? a++ : b++;
+                merged[k][0] = side[from][0], merged[k][1] = side[from][1], k++;
+            }
+        } else {
+            memcpy(merged, side, (size_t)nall * sizeof *merged);
+            qsort(merged, (size_t)nall, sizeof *merged, cmp_range);
+        }
         nmerged = 0;
         /* ranges less than 16 MB apart are one: a GetWriteWatch call costs about what 16 MB of range does, and
            TOTK maps ~4000 pieces */

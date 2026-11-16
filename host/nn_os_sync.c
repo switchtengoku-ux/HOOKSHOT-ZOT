@@ -205,11 +205,15 @@ static Obj *obj(uint64_t key, int kind) {
 static Obj *obj_nockpt(uint64_t key, int kind) {
     /* (hookshot: 128 still missed: obj_lookup was the busiest leaf in dense Kokiri, 3.2% of all samples, 4.3% of the instants when one
        thread alone ran; each actor has its own mutexes) */
-    static _Thread_local struct { uint64_t key; Obj *o; } cache[1024];
+    /* (hookshot: 4096; at 1024 obj_lookup was still 2.2% of OoT's game threads outdoors) */
+    /* (hookshot, 10/11, MEASURED, not kept: 32768 entries (a table per thread made at its first call) for these 4096. In the
+       Kokiri village obj_lookup is the main thread's busiest leaf while the frame's commands are generated (5.3% of its running
+       time, hs800), but the bigger cache gave nothing: 52.1 and 50.7 fps with it, 53.1 without (hs880 / hs882 / hs881)) */
+    static _Thread_local struct { uint64_t key; Obj *o; } cache[4096];
     static int off = -1;
     if (off < 0) off = env_on("HOS_NO_OBJ_CACHE");
     if (!off) {
-        const unsigned i = (unsigned)((key * 0x9E3779B97F4A7C15ULL) >> 54);
+        const unsigned i = (unsigned)((key * 0x9E3779B97F4A7C15ULL) >> 52);
         Obj *o = cache[i].o;
         if (cache[i].key == key && o && __atomic_load_n(&o->key, __ATOMIC_RELAXED) == key &&
             __atomic_load_n(&o->kind, __ATOMIC_ACQUIRE) == kind)
@@ -749,7 +753,50 @@ void hos_event_signal(uint64_t guest_event) { event_signal(obj(guest_event, K_EV
 
 HLE(_ZN2nn2os15InitializeEventEPNS0_9EventTypeEbNS0_14EventClearModeE) { event_init(ARG(0), (int)(ARG(1) & 1), (int)ARG(2)); }
 HLE(_ZN2nn2os13FinalizeEventEPNS0_9EventTypeE) { drop(ARG(0)); }
-HLE(_ZN2nn2os11SignalEventEPNS0_9EventTypeE) { event_signal(obj(ARG(0), K_EVENT)); }
+/* (hookshot) HOS_EVENT_WATCH_LR=<hex> (diagnostic): WaitEvent calls returning there are timed, and the threads (and callers) that
+   SignalEvent the events they wait on are counted; every 5 s. OoT's main thread waits so every 40 frames, outdoors */
+static uint64_t ew_lr = ~0ull;
+static uint64_t ew_keys[16];
+static int ew_n;
+static SRWLOCK ew_lk = SRWLOCK_INIT;
+static struct { uint64_t key, lr; const char *thread; int64_t n; } ew_sig[32];
+static int64_t ew_waits, ew_wait_ns, ew_max_ns, ew_last;
+static int ew_on(void) {
+    if (ew_lr == ~0ull) {
+        const char *e = getenv("HOS_EVENT_WATCH_LR");
+        ew_lr = e ? strtoull(e, NULL, 16) : 0;
+    }
+    return ew_lr != 0;
+}
+static void ew_report_locked(void) {
+    const int64_t now = hos_now_ns();
+    if (now - ew_last < 5000000000LL) return;
+    ew_last = now;
+    hos_log("ewatch: %lld waits at lr %#llx, %.1f ms in all, longest %.2f ms", (long long)ew_waits, (unsigned long long)ew_lr,
+            ew_wait_ns / 1e6, ew_max_ns / 1e6);
+    for (int i = 0; i < 32 && ew_sig[i].key; i++)
+        hos_log("ewatch:   event %#llx signaled by %s (lr %#llx) %lld times", (unsigned long long)ew_sig[i].key,
+                ew_sig[i].thread, (unsigned long long)ew_sig[i].lr, (long long)ew_sig[i].n);
+    memset(ew_sig, 0, sizeof ew_sig);
+    ew_waits = ew_wait_ns = ew_max_ns = 0;
+}
+static void ew_note_signal(Ctx *c, uint64_t key) {
+    if (!ew_on()) return;
+    AcquireSRWLockExclusive(&ew_lk);
+    int hit = 0;
+    for (int i = 0; i < ew_n && !hit; i++) hit = ew_keys[i] == key;
+    if (hit) {
+        const char *t = hos_thread_name(hos_self());
+        int i = 0;
+        while (i < 32 && ew_sig[i].key && !(ew_sig[i].key == key && ew_sig[i].lr == c->x[30] && ew_sig[i].thread == t)) i++;
+        if (i < 32) ew_sig[i].key = key, ew_sig[i].lr = c->x[30], ew_sig[i].thread = t, ew_sig[i].n++;
+    }
+    ReleaseSRWLockExclusive(&ew_lk);
+}
+HLE(_ZN2nn2os11SignalEventEPNS0_9EventTypeE) {
+    ew_note_signal(c, ARG(0));
+    event_signal(obj(ARG(0), K_EVENT));
+}
 HLE(_ZN2nn2os10ClearEventEPNS0_9EventTypeE) { event_clear(obj(ARG(0), K_EVENT)); }
 
 /* HOS_WAIT_LOG=1 (diagnostic): event waits by guest caller and thread every 5 s (count, total, longest), the
@@ -1293,7 +1340,26 @@ HLE(_ZN2nn2os11SystemEventC2ENS0_14EventClearModeEb) { event_init(ARG(0), 0, (in
 HLE(_ZN2nn2os11SystemEventD2Ev) { drop(ARG(0)); }
 
 /* ---- the remaining waits on the HLE's objects ----------------------------------------------------------------- */
-HLE(_ZN2nn2os9WaitEventEPNS0_9EventTypeE) { event_wait(obj(ARG(0), K_EVENT), 0, 0); }
+HLE(_ZN2nn2os9WaitEventEPNS0_9EventTypeE) {
+    if (ew_on() && c->x[30] == ew_lr) {   /* (hookshot, HOS_EVENT_WATCH_LR) */
+        const uint64_t key = ARG(0);
+        AcquireSRWLockExclusive(&ew_lk);
+        int known = 0;
+        for (int i = 0; i < ew_n && !known; i++) known = ew_keys[i] == key;
+        if (!known && ew_n < 16) ew_keys[ew_n++] = key;
+        ReleaseSRWLockExclusive(&ew_lk);
+        const int64_t t0 = hos_now_ns();
+        event_wait(obj(key, K_EVENT), 0, 0);
+        const int64_t took = hos_now_ns() - t0;
+        AcquireSRWLockExclusive(&ew_lk);
+        ew_waits++, ew_wait_ns += took;
+        if (took > ew_max_ns) ew_max_ns = took;
+        ew_report_locked();
+        ReleaseSRWLockExclusive(&ew_lk);
+        return;
+    }
+    event_wait(obj(ARG(0), K_EVENT), 0, 0);
+}
 HLE(_ZN2nn2os12TryWaitEventEPNS0_9EventTypeE) { RET(event_wait(obj(ARG(0), K_EVENT), 0, 1)); }
 HLE(_ZN2nn2os14TimedWaitEventEPNS0_9EventTypeENS_8TimeSpanE) {
     RET(event_wait(obj(ARG(0), K_EVENT), (int64_t)ARG(1) > 0 ? (int64_t)ARG(1) : 1, (int64_t)ARG(1) <= 0));

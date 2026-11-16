@@ -54,4 +54,8 @@ inline std::string game_sub_path(const char* sub, const char* name) {
 inline std::string cache_path(const char* name) { return game_sub_path("cache", name); }
 /// <game folder>/logs/<name>: the logs and traces a run writes
 inline std::string log_path(const char* name) { return game_sub_path("logs", name); }
+/// The player's settings, hookshot_options.ini: the host's (MkwVkHost.options_path, host/options_path.c: in the user folder
+/// --user names, else beside the game), "" when it has none (no file: every row at its default). Without the host (a tool), the
+/// game folder's. vk_main.cpp. The build's compile_shaders= stays in the game folder's file (vk_draw.cpp compile_all)
+std::string options_path();
 }  // namespace mkwvk

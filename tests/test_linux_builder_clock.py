@@ -46,6 +46,7 @@ class Window:
     def __init__(self, now):
         self.now = now
         self.proc, self.started, self.compile_started, self.eta = None, 0.0, None, None
+        self.shader_started = None   # (the shaders' countdown: only in that step)
         self.time_text, self.stage_text, self.heading, self.stage_label = Text(), Text(), Text(), Text()
         self.buttons = SimpleNamespace(winfo_children=lambda: [])
         self.later = []

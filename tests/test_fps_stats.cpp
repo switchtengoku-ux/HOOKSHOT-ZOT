@@ -163,6 +163,6 @@ int main() {
     fs::frame_time_text(b, sizeof b, 250.4);
     CHECK("long ms text", !std::strcmp(b, "250 ms"));
     fs::low_text(b, sizeof b, 52.4);
-    CHECK("low text", !std::strcmp(b, "1% low 52"));
+    CHECK("low text: a frame time, beside the frame time", !std::strcmp(b, "1% low 19.1 ms"));
     std::puts("fps stats: all checks passed");
 }

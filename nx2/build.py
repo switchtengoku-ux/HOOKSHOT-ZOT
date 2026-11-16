@@ -139,10 +139,19 @@ def no_throttle(handle=None):
     except (OSError, ValueError, TypeError):
         pass
 
-# (the dev-loop proposal's A4) a link whose inputs are the last one's is not run again. Its key: the command, each object's key
-# (its .o.sha1 stamp; its size and time without one), and the contents of the other files the command names (libraries,
-# resources, the symbol order), kept beside the output as <output>.linkkey with the output's size. A link that fails, or an
-# output of another size, forgets it. 3 s for the exe and less for the DLL on Windows, every build
+# (the dev-loop proposal's A4) a link whose inputs are the last one's is not run again. What decides it, kept beside the output as
+# <output>.linkkey (JSON) after each link that succeeded:
+#   - the key: the command, the compiler, the system headers' stamp, each object's key (its .o.sha1 stamp; its size and time
+#     without one), and the contents of the other files the command names (resources, the symbol order);
+#   - every file the linker itself read, as it says (link_trace): the libraries it found by search path (-l, -static-libstdc++,
+#     the C runtime's archives and start files) as well as the ones named, by size and time; and the linker program;
+#   - the outputs: the binary and every map the command asks for, by size, time and file id, so a file written over one, or a
+#     map deleted, links again.
+# A link with no such record (it failed, the linker's list could not be read, or a toolchain this does not know) always runs.
+# Delete <output>.linkkey to link again by hand. 3 s for the exe and less for the DLL on Windows, every build
+LINK_RECORD = 1
+
+
 def link_inputs(cmd, output):
     """The files a link reads: the objects of its @response files, and the other existing files it names (not its outputs)"""
     objs, others = [], []
@@ -161,9 +170,20 @@ def link_inputs(cmd, output):
     return objs, others
 
 
+def link_maps(cmd):
+    """The maps the command asks the linker to write: -Map=<file> (lld, GNU ld), /map:<file> (lld-link, and lld's MinGW driver
+    through -Xlink=)"""
+    maps = []
+    for arg in cmd:
+        m = re.search(r"(?:^|[,=])(?:--?Map=|/map:)(.+)$", arg, re.I)
+        if m:
+            maps.append(m.group(1))
+    return maps
+
+
 def link_key(cmd, output):
     h = hashlib.sha1("\0".join(cmd).encode(), usedforsecurity=False)
-    # (the compiler and its libraries: a new one compiles every object again to the same keys, and the link must follow it)
+    # (the compiler: a new one compiles every object again to the same keys, and the link must follow it)
     cc = shutil.which(cmd[0]) or cmd[0]
     st = os.stat(cc)
     h.update(("%s %d %d\n" % (cc, st.st_size, st.st_mtime_ns)).encode())
@@ -184,39 +204,133 @@ def link_key(cmd, output):
     return h.hexdigest()
 
 
+_LINK_TARGETS = {}
+
+
+def link_trace(cmd):
+    """What makes the linker list every file it reads, for the compiler's target (-dumpmachine with the command's --target):
+    lld and GNU ld on Linux print each with --trace; lld's MinGW driver and lld-link say "Reading <file>" when verbose. None for
+    a target this does not know: that link keeps no record and always runs"""
+    probe = [cmd[0]] + [a for a in cmd if a.startswith("--target=")] + ["-dumpmachine"]
+    key = tuple(probe)
+    if key not in _LINK_TARGETS:
+        try:
+            r = subprocess.run(probe, capture_output=True, text=True)
+            _LINK_TARGETS[key] = r.stdout.strip().lower() if r.returncode == 0 else ""
+        except OSError:
+            _LINK_TARGETS[key] = ""
+    t = _LINK_TARGETS[key]
+    if "msvc" in t:
+        return ["-Xlinker", "/verbose"]
+    if "mingw" in t or "windows" in t:
+        return ["-Wl,--verbose"]
+    if "linux" in t:
+        return ["-Wl,--trace"]
+    return None
+
+
+# (lld's verbose lines: the files it reads, the archive members it takes, an object's directives, the command its MinGW driver
+# made; none is an error or a warning)
+_VERBOSE = re.compile(r"^(?:ld\.lld|lld-link|lld)(?:\.exe)?: (?:Reading|Loaded|Directives:) |^lld-link(?:\.exe)? -lldmingw ")
+
+
+def traced_files(text):
+    """The files a link's own list names (link_trace), and the rest of its output without that list. An archive's member
+    (lib.a(member.o)) counts as its archive; a line that names no file that exists is output, not the list"""
+    files, rest = [], []
+    for line in text.splitlines():
+        s = line.strip()
+        m = re.match(r"^(?:ld\.lld|lld-link|lld)(?:\.exe)?: Reading (.+)$", s)
+        name = m.group(1) if m else s
+        gnu = re.match(r"^-l\S+\s+\((.+)\)$", name)   # (GNU ld's -t: a library by its -l name, then the file it found)
+        name = gnu.group(1) if gnu else name
+        member = re.match(r"^(.+)\(([^()]+)\)$", name)
+        if member and os.path.isfile(member.group(1)):
+            name = member.group(1)
+        if name and os.path.isfile(name):
+            files.append(os.path.abspath(name))
+        elif not _VERBOSE.match(s):
+            rest.append(line)
+    return files, "\n".join(rest) + ("\n" if rest else "")
+
+
+def link_program(cmd):
+    """The linker the compiler runs for this command (the first word of -###'s last command), or None"""
+    try:
+        r = subprocess.run(cmd + ["-###"], capture_output=True, text=True)
+    except OSError:
+        return None
+    for line in reversed((r.stderr or "").splitlines()):
+        m = re.match(r'^\s*"([^"]+)"', line)
+        if m:   # (Windows: clang names ld.lld without its .exe)
+            return next((p for p in (m.group(1), m.group(1) + ".exe", shutil.which(m.group(1))) if p and os.path.isfile(p)), None)
+    return None
+
+
+def file_stats(paths, ident=False):
+    """[path, size, mtime_ns(, file id)] for each, or None when one is gone"""
+    out = []
+    for p in paths:
+        try:
+            st = os.stat(p)
+        except OSError:
+            return None
+        out.append([p, st.st_size, st.st_mtime_ns] + ([st.st_ino] if ident else []))
+    return out
+
+
 def run_link(cmd, output):
-    """subprocess.run(cmd) for a link, or nothing when its inputs are the last successful one's (link_key)"""
+    """subprocess.run(cmd) for a link, or nothing when everything it read and wrote is as the last successful one left it"""
     keyfile = output + ".linkkey"
+    outputs = [output] + link_maps(cmd)
     try:
         key = link_key(cmd, output)
     except OSError:   # (an input gone: the linker says which)
         key = None
     try:
-        with open(keyfile) as f:
-            old = f.read().split()
-    except OSError:
-        old = []
-    if key and os.path.exists(output) and old == [key, str(os.path.getsize(output))]:
-        print("  (%s: its inputs are the last link's, not linked again)" % os.path.basename(output), flush=True)
+        with open(keyfile, encoding="utf-8") as f:
+            old = json.load(f)
+    except (OSError, ValueError):
+        old = None
+    program = link_program(cmd)
+    if (key and program and isinstance(old, dict) and old.get("record") == LINK_RECORD and old.get("key") == key
+            and old.get("linker") == file_stats([program]) and old.get("outputs") == file_stats(outputs, ident=True)
+            and old.get("inputs") and old.get("inputs") == file_stats([i[0] for i in old["inputs"]])):
+        print("  (%s: what it reads and writes is as the last link left it, not linked again)" % os.path.basename(output), flush=True)
         return subprocess.CompletedProcess(cmd, 0, "", "")
     with contextlib.suppress(OSError):
         os.remove(keyfile)
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode == 0 and key and os.path.exists(output):
-        with open(keyfile, "w") as f:
-            f.write("%s %d\n" % (key, os.path.getsize(output)))
+    trace = link_trace(cmd)
+    r = subprocess.run(cmd + (trace or []), capture_output=True, text=True)
+    if trace is not None:
+        out_files, r.stdout = traced_files(r.stdout or "")
+        err_files, r.stderr = traced_files(r.stderr or "")
+        objs = {os.path.abspath(o) for o in link_inputs(cmd, output)[0]}   # (the objects: their stamps are in the key)
+        read = sorted({f for f in out_files + err_files if f not in objs and f not in map(os.path.abspath, outputs)})
+    else:
+        read = []
+    record = {"record": LINK_RECORD, "key": key, "linker": file_stats([program]) if program else None,
+              "outputs": file_stats(outputs, ident=True), "inputs": file_stats(read)}
+    if r.returncode == 0 and key and program and read and record["outputs"] and record["inputs"] and record["linker"]:
+        with open(keyfile, "w", encoding="utf-8") as f:
+            json.dump(record, f, indent=0)
     return r
 
 
 COMPDB = "compile_commands.json"
 
 
-def write_compdb(out, jobs):
-    """(the dev-loop proposal's A8) <build>/compile_commands.json: every compile this build runs, as compile_one runs it, for clangd
-    and clang-tidy (nx2/dev.py compdb puts it at the checkout's top). The lifted code's and the host's commands name the lift's
-    gen/ and rt64/ folders, which are this build's; a failure to write it is no failed build"""
+def write_compdb(out, jobs, lifted=None):
+    """(the dev-loop proposal's A8) <build>/compile_commands.json, for clangd and clang-tidy: every compile this build runs, with
+    compile_one's compiler and flags. It names the source itself: since #385 compile_one compiles a giant lifted function's
+    file from a temporary copy (split_giants.compile_copy), which is gone by the time an editor reads this. The lifted C
+    (lifted: the gen/ folder, about 1.4 GB) is left out, or clangd's background index would read all of it; the host's commands
+    still name gen/ and rt64/ for their headers. Point clangd at the file (--compile-commands-dir, or a link to it at the
+    checkout's top, which .gitignore leaves out). A failure to write it is no failed build"""
+    top = os.path.normcase(os.path.abspath(lifted)) + os.sep if lifted else None
     entries = [{"directory": os.getcwd(), "file": src, "output": obj, "arguments": [cc] + list(fl) + ["-c", src, "-o", obj]}
-               for cc, src, obj, fl, deps in jobs]
+               for cc, src, obj, fl, deps in jobs
+               if not (top and os.path.normcase(os.path.abspath(src)).startswith(top))]
     tmp = os.path.join(out, COMPDB + ".new")
     try:
         with open(tmp, "w", encoding="utf-8", newline="\n") as f:
@@ -235,6 +349,74 @@ def linker(*opts):
     return [arg for opt in opts for arg in ("-Xlinker", "-Xlink=" + opt if toolchain.mingw() else opt)]
 
 
+
+def below_normal(handle):
+    """(hookshot) A compiler process at below normal priority, only with HOOKSHOT_LOW_PRIORITY=1: the PC stays more
+    responsive while the game compiles, and the build can take longer. Off by default: on an Intel CPU with efficiency cores,
+    Windows kept the below-normal compilers on those cores with most performance cores idle, and the compile used far more
+    of the CPU once they were set to normal. make_game.py runs at normal priority itself, so the compilers start at normal"""
+    if os.name != "nt" or not handle or os.environ.get("HOOKSHOT_LOW_PRIORITY", "0") in ("", "0"):
+        return
+    import ctypes
+    k = ctypes.WinDLL("kernel32")
+    k.SetPriorityClass.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+    try:
+        k.SetPriorityClass(ctypes.c_void_p(int(handle)), 0x4000)   # (BELOW_NORMAL_PRIORITY_CLASS)
+    except (OSError, ValueError, TypeError):
+        pass
+IMAGE_LIMIT = 2**31   # (x86-64 code reaches its data RIP-relative, +-2 GB)
+
+
+def image_span(path):
+    """Bytes from the start of the image to the end of its last section, as the loader maps it: a PE's SizeOfImage, or
+    an ELF's PT_LOAD segments from the lowest address to the highest end. None when the file is neither.
+
+    The game's code reaches its data (.data, the GOT, .refptr) RIP-relative, a signed 32-bit offset. lld does not range-check
+    those fixups on x86-64 COFF: a lifted build compiled at -O0 linked a 2,262 MB hookshot.exe with no error, and its first
+    instruction that read a64_dirty read 4 GB below it (bold/cover, 2026-11-13). So the build checks the size itself.
+    On ELF this is only a second check: lld does range-check x86-64 PC-relative fixups there and fails the link itself."""
+    import struct
+    with open(path, "rb") as f:
+        head = f.read(4096)
+        if head[:2] == b"MZ" and len(head) >= 64:
+            pe = struct.unpack_from("<I", head, 0x3C)[0]
+            f.seek(pe)
+            hdr = f.read(24 + 60)
+            if hdr[:4] != b"PE\0\0" or len(hdr) < 24 + 60:
+                return None
+            return struct.unpack_from("<I", hdr, 24 + 56)[0]   # (OptionalHeader.SizeOfImage, PE32 and PE32+ alike)
+        if head[:4] == b"\x7fELF" and head[4] == 2:   # (ELFCLASS64)
+            e = "<" if head[5] == 1 else ">"
+            phoff, = struct.unpack_from(e + "Q", head, 0x20)
+            phentsize, phnum = struct.unpack_from(e + "HH", head, 0x36)
+            f.seek(phoff)
+            table = f.read(phentsize * phnum)
+            loads = []
+            for i in range(phnum):
+                p_type, = struct.unpack_from(e + "I", table, i * phentsize)
+                if p_type == 1:   # (PT_LOAD)
+                    vaddr, = struct.unpack_from(e + "Q", table, i * phentsize + 0x10)
+                    memsz, = struct.unpack_from(e + "Q", table, i * phentsize + 0x28)
+                    loads.append((vaddr, vaddr + memsz))
+            return max(b for _, b in loads) - min(a for a, _ in loads) if loads else None
+    return None
+
+
+def image_too_big(exe):
+    """The link FAILED message when the linked image is past what its code can address, else None (and the image is
+    deleted then, so nothing starts it)"""
+    span = image_span(exe)
+    if span is None or span < IMAGE_LIMIT:
+        return None
+    try:
+        os.remove(exe)
+    except OSError:
+        pass
+    return ("link FAILED: the game's image is %d MB, past the %d MB its code can address (x86-64 RIP-relative); the linker "
+            "does not check this and the game would read the wrong memory. The lifted code is too big for one image: "
+            "build it at -O1 (not -O0), or split the lifted code into more than one module" % (span >> 20, IMAGE_LIMIT >> 20))
+
+
 def HOT_ORDER():
     p = os.path.join(kit.WORK, "hot_order.txt")
     if not os.path.exists(p) or os.environ.get("RX_NO_ORDER"):
@@ -250,26 +432,16 @@ GPU = os.path.join(kit.HERE, "..", "gpu")
 # FFmpeg (libavcodec's VP8/VP9 decoders, swscale) for nn::codec's video decoders (host/nn_video.c): the static build
 # in the Eglantine clone's package cache
 FFMPEG = None   # (found in the CPM caches below, once cpm_dirs is defined)
-# the renderer's WebGPU: a wgpu-native release (include/, lib/); TOTKPort's build of it by default
-WGPU = os.environ.get("WGPU_NATIVE", os.path.join(os.path.expanduser("~"), "Desktop", "TOTKPort", "third_party",
-                                                  "wgpu-native"))
 
 
-def gpu_sources():
-    """The renderer (gpu/render, TOTKPort's, NVN replayed with WebGPU) and what it builds on, from suyu
-    (gpu/third_party/suyu): the shader recompiler (Maxwell frontend, IR passes, the WGSL backend; the Ampere
-    lowering is header-only), surface formats, texture decoders (block linear, ASTC)."""
-    suyu = os.path.join(GPU, "third_party", "suyu")
-    out = []
-    for d, dirs, files in os.walk(os.path.join(suyu, "shader_recompiler")):
-        dirs[:] = [x for x in dirs if x != "glsl"]   # (the GLSL backend: TOTKPort's shader tests' reference only)
-        out += [os.path.join(d, f) for f in files if f.endswith(".cpp") and f not in ("attribute.cpp", "flow_test.cpp")]
-    vc = os.path.join(suyu, "video_core")
-    out += [os.path.join(vc, *f.split("/")) for f in ("surface.cpp", "texture_cache/format_lookup_table.cpp",
-                                                      "textures/astc.cpp", "textures/decoders.cpp")]
-    render = os.path.join(GPU, "render")
-    out += [os.path.join(render, f) for f in os.listdir(render) if f.endswith(".cpp")]
-    return sorted(out)
+def exe_resources():
+    """(Windows) the .res with the exe's icon (and the name Windows shows for it) to link: the game's own, which the builder made
+    from its .nup (work/hookshot_game.res, nx2/game_title.py), else a developer's picture (work/hookshot.res, nx2/make_icon.py),
+    else none. Only one: both are icon 1"""
+    for name in ("hookshot_game.res", "hookshot.res"):
+        if os.path.exists(os.path.join(kit.WORK, name)):
+            return [os.path.join(kit.WORK, name)]
+    return []
 
 
 def tree_headers(*roots, skip=()):
@@ -286,6 +458,77 @@ def tree_headers(*roots, skip=()):
         for path in sorted(found):
             h.update(os.path.basename(path).encode() + open(path, "rb").read())
     return h.hexdigest().encode()
+
+
+# (the dev-loop proposal's A6) the back end's own files depended on every header under gpu/vk, gpu/render, gpu/compat and suyu's
+# texture decoders (tree_headers): a comment in vk_present_rect.h, which two files include, compiled 35 files again (417 s of
+# compiler time, 35 s on 24 threads). Each is compiled with -MD now, and clang's depfile beside the object (vk_x.d for vk_x.o)
+# says which headers it read. The next build names the object by those of them under the same folders, their names and
+# contents (renderer_deps), and the blob stays for a file with no depfile yet or one that cannot be read. What a file reads from
+# elsewhere (the Vulkan and SPIR-V headers, the compiler's) counts as before: by the flags and the system headers' stamp.
+HEADER_EXTS = (".h", ".hpp", ".inc")
+_HEADER_DIGESTS = {}   # (a header's path -> its name and content's sha1, once a run: many files read the same headers)
+DEPFILE_DEPS = b"depfile:"   # (what renderer_deps' dependency text starts with when it comes from a depfile)
+DEPFILE_PENDING = "depfile-pending"   # (the stamp of an object compiled now from a depfile key, until rekey_depfiles keys it)
+
+
+def depfile_paths(text):
+    """The prerequisites of a make-style depfile (clang -MD): the target and its ':' left out, line continuations joined,
+    '\\ ' a space in a name, '$$' a '$', '\\#' a '#'. Clang writes the names with '/' on Windows too"""
+    text = text.replace("\\\r\n", " ").replace("\\\n", " ")
+    colon = re.search(r":(\s|$)", text)
+    if not colon:
+        return []
+    paths, cur, i, body = [], [], 0, text[colon.end():]
+    while i < len(body):
+        c = body[i]
+        if c == "\\" and i + 1 < len(body) and body[i + 1] in " #":
+            cur.append(body[i + 1])
+            i += 2
+            continue
+        if c == "$" and body[i + 1:i + 2] == "$":
+            cur.append("$")
+            i += 2
+            continue
+        if c.isspace():
+            if cur:
+                paths.append("".join(cur))
+                cur = []
+        else:
+            cur.append(c)
+        i += 1
+    if cur:
+        paths.append("".join(cur))
+    return paths
+
+
+def depfile_of(obj):
+    return obj[:-2] + ".d" if obj.endswith(".o") else obj + ".d"
+
+
+def renderer_deps(blob, roots, obj):
+    """The headers under roots that obj's last compile read (its depfile), by name and content; blob, the whole folders', when
+    there is no depfile or it names nothing under them"""
+    try:
+        with open(depfile_of(obj), encoding="utf-8", errors="replace") as f:
+            paths = depfile_paths(f.read())
+    except OSError:
+        return blob
+    tops = [os.path.normcase(os.path.abspath(r)) + os.sep for r in roots]
+    picked = sorted({os.path.normcase(os.path.abspath(p)) for p in paths if p.endswith(HEADER_EXTS)
+                     and os.path.normcase(os.path.abspath(p)).startswith(tuple(tops))})
+    if not picked:
+        return blob
+    h = hashlib.sha1(b"depfile 1\0", usedforsecurity=False)
+    for path in picked:
+        if path not in _HEADER_DIGESTS:
+            try:
+                with open(path, "rb") as f:
+                    _HEADER_DIGESTS[path] = os.path.basename(path).encode() + hashlib.sha1(f.read(), usedforsecurity=False).digest()
+            except OSError:   # (a header gone since: the key changes, and the file is compiled again)
+                _HEADER_DIGESTS[path] = os.path.basename(path).encode() + b"\0gone"
+        h.update(_HEADER_DIGESTS[path])
+    return DEPFILE_DEPS + h.hexdigest().encode()
 
 
 def ngx_library(sdk, linux):
@@ -335,7 +578,7 @@ def vk_sources():
             out += [os.path.join(d, f) for f in files if f.endswith(".cpp")]
     out += [os.path.join(vk, f) for f in os.listdir(vk) if f.endswith(".cpp") and f != NGX_MSVC_RT]
     vc = os.path.join(GPU, "third_party", "suyu", "video_core")
-    out += [os.path.join(vc, "textures", f) for f in ("decoders.cpp", "astc.cpp")]   # (the WebGPU back end's unswizzle)
+    out += [os.path.join(vc, "textures", f) for f in ("decoders.cpp", "astc.cpp")]   # (suyu's unswizzle and ASTC decoder)
     return sorted(out)
 
 
@@ -529,6 +772,7 @@ def tree_ws(pid):
     return total
 
 
+# doc: docs/compiler-memory-accounting.md
 def rss_mb(proc):
     """A running compiler's resident memory in MB (0: exited, not known, or not started yet)"""
     if proc is None:
@@ -793,10 +1037,11 @@ def write_info(out):
 def flag_text(fl):
     """The flags an object key is named by. Include folders are left out (their headers are in deps). The builder's
     own folder is <root> (issue 565: versions\\<tag>\\... made every update look new). --sysroot= is <sysroot>: the
-    AppImage mount is a new /tmp/.mount_... path every start, and that path is not a change in the headers."""
+    AppImage mount is a new /tmp/.mount_... path every start, and that path is not a change in the headers. -MD is left out:
+    it writes the depfile beside the object (renderer_deps) and changes nothing in it."""
     kept = []
     for f in fl:
-        if f.startswith("-I"):
+        if f.startswith("-I") or f == "-MD":
             continue
         if f.startswith("--sysroot="):
             f = "--sysroot=<sysroot>"
@@ -1076,6 +1321,32 @@ def migrate_stamps(gen, obj_dir, fl, deps):
 
 
 PLANNED = {}   # (src, obj) -> the object key plan_jobs worked out, so compile_one does not hash every source again
+DEPFILE_JOBS = {}   # (a back-end object -> the folders' blob, the folders, its other deps: renderer_deps, rekey_depfiles)
+
+
+def rekey_depfiles(jobs):
+    """After the compile: each back-end object stamped and cached by the key its own depfile gives (renderer_deps), the only key
+    that vouches for it. An object compiled now is stamped DEPFILE_PENDING by compile_one when its planned key came from the last
+    compile's depfile, which may lack a header the new source reads (hckrman101 on #2706: add an include, take it out, edit the
+    header, put it back, and that key named an object built with the old header); one compiled from the folders' blob was cached
+    by that key too, which covers every header. One stamped otherwise is another build's and is left alone"""
+    for cc, src, obj, fl, deps in jobs:
+        if obj not in DEPFILE_JOBS or not os.path.exists(obj):
+            continue
+        stamp = obj + ".sha1"
+        try:
+            with open(stamp) as f:
+                old = f.read()
+        except OSError:
+            continue
+        if old != DEPFILE_PENDING and old != (PLANNED.get((src, obj)) or object_key(src, fl, deps)):
+            continue
+        blob, roots, extras = DEPFILE_JOBS[obj]
+        key = object_key(src, fl, renderer_deps(blob, roots, obj) + extras)
+        cache_put(obj, key)   # (also when it is the planned key: compile_one caches no object by a depfile key)
+        if key != old:
+            with open(stamp, "w") as f:
+                f.write(key)
 
 
 # (hookshot) the order of the compile: the longest first (LPT), so no long one starts late and runs alone at the end. The lift's
@@ -1126,6 +1397,7 @@ def compile_one(job):
     try:
         with subprocess.Popen([cc] + fl + ["-c", c_src, "-o", obj], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as p:
             no_throttle(getattr(p, "_handle", None))
+            below_normal(getattr(p, "_handle", None))
             if GATE:
                 GATE.started(lease, p)
             out, err = p.communicate()
@@ -1138,6 +1410,12 @@ def compile_one(job):
     if r.returncode:
         failure = r.stderr or r.stdout or "Compiler exited with status %d without diagnostics." % r.returncode
         return src, time.time() - t, failure[-4000:]
+    if deps.startswith(DEPFILE_DEPS):
+        # (keyed by the last compile's depfile: this source may read headers that one did not, so the key does not vouch for the
+        # object. rekey_depfiles stamps and caches it by the key its own new depfile gives; a build that stops before that leaves
+        # it pending, and the next one compiles it again)
+        open(stamp, "w").write(DEPFILE_PENDING)
+        return src, time.time() - t, None
     open(stamp, "w").write(key)
     cache_put(obj, key)
     return src, time.time() - t, None
@@ -1203,13 +1481,12 @@ def main():
             [os.path.join(rt64, "a64_rt.c")]
     if a.standalone:
         srcs += [os.path.join(gen, f) for f in ("a64_stubs.c", "hos_image.c", "nvn2_exports.c")]
-        # (EvilOOT) host/rx_nowgpu.c stands in for the WebGPU renderer only when there is no wgpu-native to build it with (Linux has
-        # its own stand-ins, host/posix/linux_stubs.c)
-        have_wgpu = os.path.isfile(os.path.join(WGPU, "include", "webgpu", "webgpu.h"))
+        # (EvilOOT) host/rx_nowgpu.c stands in for the WebGPU renderer, which is built no more (the Vulkan back end is the
+        # only renderer); Linux has its own stand-ins, host/posix/linux_stubs.c
         host_srcs = sorted(os.path.join(HOST, f) for f in os.listdir(HOST) if f.endswith(".c") and (f != "pgo_rt.c" or PGO == "gen")
-                           and not (LINUX and f in ("display.c", "mf_av1.c", "rx_nowgpu.c")) and (f != "rx_nowgpu.c" or not have_wgpu)
+                           and not (LINUX and f in ("display.c", "mf_av1.c", "rx_nowgpu.c"))
                            and (f != "dav1d_av1.c" or dav1d_windows()))
-        if LINUX:   # (the window on SDL2, the Win32 calls on POSIX, no Media Foundation and no WebGPU renderer)
+        if LINUX:   # (the window on SDL2, the Win32 calls on POSIX, no Media Foundation)
             host_srcs += [os.path.join(POSIX, f) for f in ("win32_posix.c", "display_sdl.c", "linux_stubs.c", "prof.c")]
     else:
         srcs += [os.path.join(NX2_RT, "eden_shim.c"), write_info(out)]
@@ -1223,6 +1500,14 @@ def main():
     # (hookshot) code_hot.c, the lift's hot functions together (A64_HOT_FUNCS + A64_HOT_CHUNK=1): at RX_HOT_OPT
     # (default O2), so the hot callees inline into their hot callers
     hot_fl = [("-" + os.environ.get("RX_HOT_OPT", "O2")) if f == "-" + OPT else f for f in fl]
+    # (hookshot) the hot code has three functions of about 2 MB of C each (vector float code; 1.4 to 2.7 million instructions once
+    # the guest model's helpers are inlined). For a function with no profile, the machine code's loop-invariant motion hoisted
+    # every invariant instruction out of their function-wide loop; each one was then live through the whole function, and the
+    # liveness tables of the passes after it (Live Variable Analysis, the PHI elimination) took one compiler past 15 GB
+    # (measured, clang 23, one hot piece alone; three of them at once on a 16 GB PC). "all": no hoisting to a block the static
+    # estimate calls hotter either, which is what a profile already did for the functions it knows ("pgo", the default): that
+    # function alone then takes 1.9 GB, and with a matching profile the object is the same byte for byte
+    hot_fl = hot_fl + ["-mllvm", "-disable-hoisting-to-hotter-blocks=all"]
     # (hookshot) RX_PGO=gen: code_hot.c counts its branches (host/pgo_rt.c writes them; -O1 builds much sooner, and the counters are
     # placed before the optimiser, so a profile from it fits the -O2 build). RX_PGO=<merged .prof>: built with that profile
     if PGO == "gen":
@@ -1298,28 +1583,12 @@ def main():
         jobs += zstd_jobs(cc, target() + THIRD_PARTY_CPU + ["-O2", "-g0", "-DNDEBUG", "-Wno-everything", "-DZSTD_DISABLE_ASM",
                                                             "-DZSTD_LEGACY_SUPPORT=0", "-DZSTD_MULTITHREAD=0"], obj_dir, "zstd_",
                           tp_deps)
-    # the renderer (C++20, NDEBUG: no asserts in it or suyu), when a wgpu-native release is there
-    wgpu = a.standalone and not LINUX and os.path.isfile(os.path.join(WGPU, "include", "webgpu", "webgpu.h"))
-    if a.standalone and not wgpu and not LINUX:
-        print("no wgpu-native at %s (WGPU_NATIVE): building without the renderer" % WGPU)
-    if wgpu:
-        cxx = toolchain.need(toolchain.find("clang++"))
-        gflags = target() + ["-std=c++20", "-O2", "-g0", "-DNDEBUG", "-Wno-everything",
-                                              "-I" + os.path.join(GPU, "compat"),
-                                              "-I" + os.path.join(GPU, "third_party", "suyu"),
-                                              "-I" + os.path.join(WGPU, "include"), "-I" + HOST, "-I" + rt64] + WRITE_TRACK +                  ["-include", os.path.join(GPU, "render", "rx_wgpu_names.h")]   # (rx_* -> wgr_*: host/rx_backend.c)
-        gdeps = tree_headers(GPU, HOST, skip=("vk",)) + open(os.path.join(WGPU, "include", "webgpu", "webgpu.h"), "rb").read()
-        for src in gpu_sources():
-            name = os.path.relpath(src, GPU).replace(os.sep, "_")[:-4]
-            # (suyu's recompiler and texture code are third-party: nx2/third_party_objects.py; the renderer itself is not)
-            jobs.append((cxx, src, os.path.join(obj_dir, "gpu_" + name + ".o"), gflags,
-                         gdeps + tp_deps if third_party_objects.is_third_party(src) else gdeps))
-    # the Vulkan back end, a DLL of its own (RX_BACKEND=vulkan): CPM cache, HOOKSHOT_*_HEADERS, or system includes
+    # the Vulkan back end, a DLL of its own (the only renderer): CPM cache, HOOKSHOT_*_HEADERS, or system includes
     vk_jobs = []
     vk_headers, spirv_headers, vma_headers = vulkan_headers()
     build_vk = a.standalone and vk_headers and spirv_headers and vma_headers
     if a.standalone and not build_vk:
-        # (was silent: the exe linked, RX_BACKEND=vulkan then fell through to WebGPU / a stub, black window)
+        # (was silent: the exe linked, the renderer then fell through to a stub, black window)
         missing = [n for n, p in (("Vulkan", vk_headers), ("SPIR-V", spirv_headers), ("VMA", vma_headers)) if not p]
         print("no headers for %s (missing %s). Set RX_CPM to a CPM cache, or HOOKSHOT_VULKAN_HEADERS / "
               "HOOKSHOT_SPIRV_HEADERS / HOOKSHOT_VMA_HEADERS (package root or its include/ folder), or install "
@@ -1345,7 +1614,8 @@ def main():
             # (what the code takes for granted, which newer C++ libraries bring in by themselves and older ones do not: issue 48)
             "-include", "algorithm", "-include", "cstdio", "-include", "cstdlib", "-include", "cstring", "-include", "functional",
             "-include", "string", "-include", "vector",
-            "-std=c++20", "-O2", "-g0", "-DNDEBUG", "-Wno-everything", "-DVK_NO_PROTOTYPES", "-DMKWVK_BUILDING",
+            # (hookshot, RX_VK_DEBUGINFO=1: CodeView line tables and a PDB for the back end, for line-level profiles; same code)
+            "-std=c++20", "-O2", "-gcodeview" if os.environ.get("RX_VK_DEBUGINFO") == "1" else "-g0", "-DNDEBUG", "-Wno-everything", "-DVK_NO_PROTOTYPES", "-DMKWVK_BUILDING",
             *(["-DHOOKSHOT_RELEASE"] if os.environ.get("RX_RELEASE") == "1" else []),   # (the shaders precompiled before the game)
             # (Eden's recompiler before suyu's root: suyu has its own shader_recompiler/ headers, and a Shader::Info
             # of the other layout in some objects is what crashed the descriptor walk. MKWVK_INCLUDES changes the
@@ -1372,12 +1642,20 @@ def main():
         fsr_flags = ["-DHOOKSHOT_FSR", "-I" + os.path.join(kit.HERE, "..", "third_party", "fidelityfx")] if FSR else []
         if FSR:
             print("the Vulkan back end: with AMD FSR 4 (AMD's FSR API headers, third_party/fidelityfx)", flush=True)
+        # (hookshot) Intel XeSS Super Resolution (vk_xess.cpp), from Intel's MIT XeSS API headers (third_party/xess/inc): in every
+        # Windows build, as it only loads the player's own libxess.dll at run time (never shipped: Intel's license) and does
+        # nothing without it. Only vk_xess.cpp sees Intel's headers. Not on Linux, where Intel ships no XeSS library: there it is
+        # the stubs that say XeSS is Windows only
+        xess_headers = os.path.join(kit.HERE, "..", "third_party", "xess", "inc")
+        xess_flags = [] if LINUX else ["-DHOOKSHOT_XESS", "-I" + xess_headers]
+        xess_deps = b"" if LINUX else tree_headers(os.path.join(xess_headers, "xess"))
         # (Eden's recompiler and sirit see only their own headers: a change to the back end's vk_*.h does not
         # rebuild their ~500 files; the back end itself depends on everything, suyu's texture decoders included)
         vk_lib_deps = tree_headers(os.path.join(vk, "eden"), os.path.join(vk, "sirit"), os.path.join(vk, "compat"),
                                    os.path.join(GPU, "compat"))
-        vdeps = tree_headers(vk, os.path.join(GPU, "render"), os.path.join(GPU, "compat"),
-                             os.path.join(GPU, "third_party", "suyu", "video_core", "textures"))
+        vdeps_roots = (vk, os.path.join(GPU, "render"), os.path.join(GPU, "compat"),
+                       os.path.join(GPU, "third_party", "suyu", "video_core", "textures"))
+        vdeps = tree_headers(*vdeps_roots)
         # (hookshot) Dear ImGui (third_party/imgui) draws the overlays over the window's image (gpu/vk/vk_imgui.cpp; vk_menu.cpp
         # draws with it). Its objects see only its own headers; its headers are a dependency of the two files that include them
         imgui = os.path.normpath(os.path.join(kit.HERE, "..", "third_party", "imgui"))
@@ -1415,16 +1693,22 @@ def main():
         for src in vk_sources():
             name = os.path.relpath(src, vk).replace(os.sep, "_")[:-4]
             lib = os.path.relpath(src, vk).split(os.sep)[0] in ("eden", "sirit")
-            vk_jobs.append((cxx, src, os.path.join(obj_dir, "vk_" + name + ".o"),
-                            (tp_vflags if lib else vflags + vk_pgo_flags) +
+            obj = os.path.join(obj_dir, "vk_" + name + ".o")
+            extras = ((logo_text if os.path.basename(src) == "vk_imgui.cpp" else b"") +
+                      (ngx_deps if os.path.basename(src) == "vk_dlss.cpp" else b"") +
+                      (xess_deps if os.path.basename(src) == "vk_xess.cpp" else b"") +
+                      (imgui_deps if os.path.basename(src) in imgui_users else b""))
+            if not lib:   # (the back end's own files: the headers their depfile names, renderer_deps; DEPFILE_JOBS re-keys them)
+                DEPFILE_JOBS[obj] = (vdeps, vdeps_roots, extras)
+            vk_jobs.append((cxx, src, obj,
+                            (tp_vflags if lib else vflags + vk_pgo_flags) + ([] if lib else ["-MD"]) +
                             ([shader_stamp] if os.path.basename(src) == "vk_shader.cpp" else []) +
                             ([stamp_def] if os.path.basename(src) == "vk_menu.cpp" else []) +
                             (ngx_flags if os.path.basename(src) == "vk_dlss.cpp" else []) +
                             (imgui_flags if os.path.basename(src) in imgui_users else []) +
-                            (fsr_flags if os.path.basename(src) == "vk_fsr4.cpp" else []),
-                            vk_lib_deps + tp_deps if lib else vdeps + (logo_text if os.path.basename(src) == "vk_imgui.cpp" else b"") +
-                            (ngx_deps if os.path.basename(src) == "vk_dlss.cpp" else b"") +
-                            (imgui_deps if os.path.basename(src) in imgui_users else b"")))
+                            (fsr_flags if os.path.basename(src) == "vk_fsr4.cpp" else []) +
+                            (xess_flags if os.path.basename(src) == "vk_xess.cpp" else []),
+                            vk_lib_deps + tp_deps if lib else renderer_deps(vdeps, vdeps_roots, obj) + extras))
         # (hookshot) the program cache's zstd compression (RX_VK_PROGRAM_CACHE_ZSTD): third_party/zbic's single-file
         # zstd, built as C into the same DLL. Its headers are the object's dependencies.
         zstd_src = os.path.join(kit.ROOT, "third_party", "zbic", "zstd.c")
@@ -1485,7 +1769,7 @@ def main():
     global GATE
     GATE = None if os.environ.get("HOOKSHOT_MEM_GATE") == "0" else MemoryGate()
     eta_jobs = GATE.expected(a.jobs) if GATE else a.jobs   # (the countdown with the compilers the memory holds, not --jobs)
-    write_compdb(out, jobs)
+    write_compdb(out, jobs, gen)
     counted, expected, pending = os.environ.get("HOOKSHOT_TIMES"), {}, []
     if OBJ_STORE:   # (the objects this build needs that another work folder built: in the folder's cache before the plan counts them)
         object_store.share(OBJ_CACHE, OBJ_STORE)   # (the folder's own first, those of a build that stopped before it shared them too)
@@ -1510,21 +1794,27 @@ def main():
     with concurrent.futures.ThreadPoolExecutor(a.jobs) as ex:
         # (as each ends, not in order: the builder app shows progress from these lines, and the biggest file comes first)
         submitted = {ex.submit(compile_one, job): job for job in jobs}
-        for future in concurrent.futures.as_completed(submitted):
-            src, secs, err = future.result()
-            size = src_size(src) >> 20
-            if err:
-                failed.append(submitted[future])
-                print("not compiled yet: %s (%d MB, %.0fs), tried again alone at the end:\n%s"
-                      % (os.path.basename(src), size, secs, err[-1500:]), flush=True)
-            else:
-                print("  %-16s %4d MB  %6.0fs  (%.0fs)" % (os.path.basename(src), size, secs, time.time() - t0), flush=True)
-            if counted:
-                print("@@file %s %.1f %s" % (os.path.basename(src), secs,
-                                             "failed" if err else "cached" if secs <= 0 else "new"), flush=True)
-                if not err and expected.get(src):
-                    pending.remove(expected[src].pop())
-                    print("@@eta %d" % eta_left(pending, eta_jobs), flush=True)
+        try:
+            for future in concurrent.futures.as_completed(submitted):
+                src, secs, err = future.result()
+                size = src_size(src) >> 20
+                if err:
+                    failed.append(submitted[future])
+                    print("not compiled yet: %s (%d MB, %.0fs), tried again alone at the end:\n%s"
+                          % (os.path.basename(src), size, secs, err[-1500:]), flush=True)
+                else:
+                    print("  %-16s %4d MB  %6.0fs  (%.0fs)" % (os.path.basename(src), size, secs, time.time() - t0), flush=True)
+                if counted:
+                    print("@@file %s %.1f %s" % (os.path.basename(src), secs,
+                                                 "failed" if err else "cached" if secs <= 0 else "new"), flush=True)
+                    if not err and expected.get(src):
+                        pending.remove(expected[src].pop())
+                        print("@@eta %d" % eta_left(pending, eta_jobs), flush=True)
+        except BaseException:
+            # (a compile that raised (its compiler gone, an object or its stamp not writable) or Ctrl-C: the pool's exit would
+            # start every compile still queued first, the whole compile with nothing said, before the build stopped)
+            ex.shutdown(wait=False, cancel_futures=True)
+            raise
     # (a compiler that ran out of memory beside the others dies "due to signal": a player's 24 MB code_021.c, 2026-11-08. The
     # files that failed are compiled again one at a time, with all the memory, before the build gives up)
     still = 0
@@ -1549,7 +1839,8 @@ def main():
         print("the third-party objects: %d in %s (%d MB), stamp %s" % (
             len(made), a.third_party_objects, sum(e["size"] for e in made.values()) >> 20, tp_stamp[:16]), flush=True)
         return 0
-    if OBJ_STORE:
+    rekey_depfiles(vk_jobs)
+    if OBJ_STORE:   # (after rekey_depfiles: the objects it caches by their depfile's key go to the store too)
         print("object store: %d new objects to it" % object_store.share(OBJ_CACHE, OBJ_STORE), flush=True)
     if a.standalone and not vk_only:
         write_kept(gen, jobs)
@@ -1570,6 +1861,10 @@ def main():
             print("link FAILED (%.0fs), %d undefined symbols" % (time.time() - t, len(undefined)))
             print("\n".join(undefined[:60]) if undefined else (r.stdout + r.stderr)[-3000:])
             return 1
+        too_big = image_too_big(exe)
+        if too_big:
+            print(too_big)
+            return 1
         print("linked %s: %d MB (%.0fs)" % (exe, os.path.getsize(exe) >> 20, time.time() - t))
         sdl = os.environ.get("HOOKSHOT_SDL2", "")   # (libSDL2-2.0.so.0 beside it, when the AppImage brings one)
         if sdl and os.path.exists(sdl):
@@ -1581,10 +1876,9 @@ def main():
         r = run_link([cc] + toolchain.native_target() + toolchain.native_link() +
                            ["-o", exe] + linker("/map:" + exe[:-4] + ".map") + [toolchain.link_opt("/stack:8388608"), "@" + rsp] + HOT_ORDER() + HOST_LIBS +
                            ([toolchain.link_opt("/nodefaultlib:clang_rt.profile.lib")] if PGO == "gen" else []) +
-                           ([os.path.join(kit.WORK, "hookshot.res")] if os.path.exists(os.path.join(kit.WORK, "hookshot.res")) else []) +   # (nx2/make_icon.py)
+                           exe_resources() +   # (the exe's icon and name: nx2/game_title.py, nx2/make_icon.py)
                            [win_manifest.write(os.path.join(out, "hookshot_manifest.res"))] +   # (UTF-8 paths: nx2/win_manifest.py)
                            ([toolchain.link_opt("/subsystem:windows"), toolchain.link_opt("/entry:mainCRTStartup")] if os.environ.get("RX_RELEASE") == "1" else []) +   # (no console window)
-                           ([os.path.join(WGPU, "lib", "wgpu_native.dll.lib")] if wgpu else []) +
                            ([os.path.join(FFMPEG, "lib", l + ".lib") for l in ("avcodec", "swscale", "swresample", "avutil")] +
                             ["-lbcrypt", "-lmfplat", "-lmfuuid", "-lstrmiids", "-lole32"] if FFMPEG else []) +
                            ([os.path.join(dav1d_windows(), "lib", "libdav1d.a")] if dav1d_windows() else []) +
@@ -1595,12 +1889,11 @@ def main():
             print("link FAILED (%.0fs), %d undefined symbols" % (time.time() - t, len(undefined)))
             print("\n".join(undefined[:60]) if undefined else (r.stdout + r.stderr)[-3000:])
             return 1
+        too_big = image_too_big(exe)
+        if too_big:
+            print(too_big)
+            return 1
         print("linked %s: %d MB (%.0fs)" % (exe, os.path.getsize(exe) >> 20, time.time() - t))
-        if wgpu:   # (wgpu_native.dll beside it; in use while the game runs)
-            import shutil
-            dll, dst = os.path.join(WGPU, "lib", "wgpu_native.dll"), os.path.join(out, "wgpu_native.dll")
-            if not os.path.exists(dst) or os.path.getsize(dst) != os.path.getsize(dll):
-                shutil.copyfile(dll, dst)
         # (hookshot) a shared FFmpeg's DLLs beside it (an LGPL shared build, as cross builds find: the static one needs none)
         for l in FFMPEG_LIBS if FFMPEG and os.path.isdir(os.path.join(FFMPEG, "bin")) else ():
             import shutil
@@ -1620,7 +1913,7 @@ def main():
         if os.path.exists(sdl3) and (not os.path.exists(sdl3_dst) or os.path.getsize(sdl3_dst) != os.path.getsize(sdl3)):
             import shutil
             shutil.copyfile(sdl3, sdl3_dst)
-    if vk_jobs:   # (hookshot_vk.dll beside the exe: loaded by host/rx_backend.c with RX_BACKEND=vulkan)
+    if vk_jobs:   # (hookshot_vk.dll beside the exe: loaded by host/rx_backend.c)
         vdll = os.path.join(out, VK_LIB)
         vrsp = os.path.join(out, "vk_objs.rsp")
         open(vrsp, "w", encoding="utf-8").write("\n".join('"%s"' % j[2].replace("\\", "/") for j in vk_jobs))
@@ -1654,10 +1947,13 @@ def main():
             print("link FAILED (%.0fs), %d undefined symbols" % (time.time() - t, len(undefined)))
             print("\n".join(undefined[:40]) if undefined else (r.stdout + r.stderr)[-3000:])
             return 1
+        too_big = image_too_big(dll)
+        if too_big:
+            print(too_big)
+            return 1
         print("linked %s: %d MB, no undefined symbols (%.0fs)" % (dll, os.path.getsize(dll) >> 20, time.time() - t))
     return 0
 
 
 if __name__ == "__main__":
     sys.exit(main())
-
