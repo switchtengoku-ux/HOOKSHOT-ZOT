@@ -586,7 +586,8 @@ static int mix_depth(int i, int guard) {   /* how many sub mixes lie between thi
 /* (enhanced) Music volume / Effects volume (host/enh_audio.c, the rule in host/enh_audio.h): a PCM16 voice, or a voice
    streamed dry at pitch 1, is the music; the rest the effects. The voice's gain, ramped from its last frame's, rides on its own volume ramp for the frame:
    render_frame scales v->volume and v->ramp_volume around render_voice and puts them back after. 100% both: 1 to 1. */
-/* (enhanced) HOOKSHOT_ENH_AUDIO_LOG=2: every 2 s, each playing voice: its format, channels, wave buffers queued and
+#include "enh_product.h"   /* (enhanced) enh_env: the switch's name */
+/* (enhanced) <ENH_ENV_PREFIX>AUDIO_LOG=2: every 2 s, each playing voice: its format, channels, wave buffers queued and
    appended in all (a stream keeps getting new ones), whether the current one loops, samples played, volume and where it
    goes, for telling the music from the rest (docs/enhanced/AUDIO_MIX.md) */
 static void enh_voice_diag(void) {
@@ -594,7 +595,7 @@ static void enh_voice_diag(void) {
     static int64_t next;
     static uint64_t tail[MAX_VOICES];
     static unsigned appended[MAX_VOICES];
-    if (on < 0) on = getenv("HOOKSHOT_ENH_AUDIO_LOG") && atoi(getenv("HOOKSHOT_ENH_AUDIO_LOG")) >= 2;
+    if (on < 0) on = enh_env("AUDIO_LOG") && atoi(enh_env("AUDIO_LOG")) >= 2;
     if (!on) return;
     for (int i = 0; i < MAX_VOICES; i++) {
         const Voice *v = &voices[i];
@@ -653,7 +654,7 @@ static void render_frame(int16_t *pcm, int channels) {   /* 240 frames of the de
         }
     for (int i = 0; i < MAX_VOICES; i++)
         if (voices[i].used) enh_render_voice(&voices[i]);   /* (enhanced) render_voice with the Music/Effects volume */
-    enh_voice_diag();   /* (enhanced) HOOKSHOT_ENH_AUDIO_LOG=2 */
+    enh_voice_diag();   /* (enhanced) <ENH_ENV_PREFIX>AUDIO_LOG=2 */
     for (int i = 0; i < MAX_SPLITTERS; i++)   /* (the splitters' volume ramps: once a frame, whichever voices use them) */
         if (splitters[i].used)
             for (int d = 0; d < splitters[i].dests; d++)

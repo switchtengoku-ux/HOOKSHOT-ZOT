@@ -1,0 +1,13 @@
+{
+  "product": "Longshot",
+  "options": "longshot_options.ini",
+  "env_prefix": "LONGSHOT_ENH_",
+  "env_file": "longshot_env.txt",
+  "store_win": "LongshotZOT",
+  "store_posix": "longshot-zot",
+  "store_env_prefix": "LONGSHOT_ZOT_",
+  "version_file": "longshot_version.txt",
+  "saves_script": "longshot_saves.py",
+  "saves_program": "LONGSHOT",
+  "snapshot_format": "longshot-zot-snapshot"
+}

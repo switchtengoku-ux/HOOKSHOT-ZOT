@@ -1,0 +1,13 @@
+{
+  "product": "Hookshot",
+  "options": "hookshot_options.ini",
+  "env_prefix": "HOOKSHOT_ENH_",
+  "env_file": "hookshot_env.txt",
+  "store_win": "HookshotZOT",
+  "store_posix": "hookshot-zot",
+  "store_env_prefix": "HOOKSHOT_ZOT_",
+  "version_file": "hookshot_version.txt",
+  "saves_script": "oot_saves.py",
+  "saves_program": "HOOKSHOT",
+  "snapshot_format": "hookshot-zot-snapshot"
+}
