@@ -93,7 +93,8 @@ class GraphicsProfileTests(unittest.TestCase):
                         ("texture_detail", "tx_texture_detail"), ("anisotropic_filtering", "tx_anisotropy"),
                         ("vram_budget", "tx_vram_budget")):
             if key in zg.GRAPHICS_KEYS:   # (this product's rows: another product's menu may lack one)
-                self.assertEqual(zg.ROWS[key][1], table(fn), key)
+                # (ROWS may name more values at the end: another product's, past this menu's own)
+                self.assertEqual(zg.ROWS[key][1][:len(table(fn))], table(fn), key)
         framegen = menu[menu.index("const char* tx_framegen(int v)"):]
         self.assertEqual(zg.ROWS["frame_generation"][1], re.findall(r'"([^"]*)"', framegen[:framegen.index("};")]))
         rows = (ROOT / "gpu" / "vk" / "upscaler_rows.h").read_text(encoding="utf-8")
