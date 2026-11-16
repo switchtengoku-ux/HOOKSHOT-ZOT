@@ -1,5 +1,5 @@
 """scripts/enhanced/zot_graphics.py, game-free: graphics profiles saved from and put back into a made-up
-hookshot_options.ini in a temp folder; the running-game check replaced.
+options file in a temp folder; the running-game check replaced.
 
 - GRAPHICS_KEYS is exactly the Insert menu's Graphics rows as gpu/vk/vk_menu.cpp saves them (its rows and ini_key);
 - save keeps only the Graphics lines; apply changes only them, keeps every other line and its order, appends missing
@@ -57,7 +57,7 @@ class GraphicsProfileTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.game = self.root / "game"
         self.game.mkdir()
-        self.ini = self.game / "hookshot_options.ini"
+        self.ini = self.game / zg.OPTIONS
         self.ini.write_text(OPTIONS, encoding="utf-8")
         self.store = self.root / "store"
         self.running = mock.patch.object(zg.oot, "running_games", return_value=[])
@@ -79,7 +79,8 @@ class GraphicsProfileTests(unittest.TestCase):
     def test_labels_are_the_menus(self):
         menu = (ROOT / "gpu" / "vk" / "vk_menu.cpp").read_text(encoding="utf-8")
         names = [n for n, f in re.findall(r'\{TAB_GRAPHICS, "([^"]+)", &opts\.(\w+)', menu) if f != "enh_gfx_profile"]
-        self.assertEqual(list(zg.ROWS), list(zg.GRAPHICS_KEYS))
+        missing = [k for k in zg.GRAPHICS_KEYS if k not in zg.ROWS]
+        self.assertEqual(missing, [], "Graphics rows with no names in zot_graphics.py ROWS")
         self.assertEqual([zg.row_name(k) for k in zg.GRAPHICS_KEYS], names)
 
         def table(fn):
@@ -91,7 +92,8 @@ class GraphicsProfileTests(unittest.TestCase):
                         ("upscaling", "tx_upscale"), ("ultrawide_menus", "tx_wide_menus"),
                         ("texture_detail", "tx_texture_detail"), ("anisotropic_filtering", "tx_anisotropy"),
                         ("vram_budget", "tx_vram_budget")):
-            self.assertEqual(zg.ROWS[key][1], table(fn), key)
+            if key in zg.GRAPHICS_KEYS:   # (this product's rows: another product's menu may lack one)
+                self.assertEqual(zg.ROWS[key][1], table(fn), key)
         framegen = menu[menu.index("const char* tx_framegen(int v)"):]
         self.assertEqual(zg.ROWS["frame_generation"][1], re.findall(r'"([^"]*)"', framegen[:framegen.index("};")]))
         rows = (ROOT / "gpu" / "vk" / "upscaler_rows.h").read_text(encoding="utf-8")

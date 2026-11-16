@@ -35,3 +35,6 @@ Changes of the fork only. Upstream's are in [CHANGELOG.md](../../CHANGELOG.md).
 - Porting tool: `scripts/enhanced/port_to.py` carries the Enhanced layer to another fork of the game (a dry run by
   default; product profiles for Hookshot and Longshot), `tests/test_enh_port.py` ([PORTING.md](PORTING.md)). The audio
   diagnostics' switch in `host/nn_audio.c` now goes through `enh_env`. Branch `feature/port-to`.
+- Port fixes from the first port to Longshot: the Graphics rows a graphics profile holds are the product's own
+  (`GRAPHICS_KEYS` in `enh_product.py`, `graphics_keys` in the product profiles; Longshot has no Texture detail),
+  and the Enhanced tests no longer name Hookshot's files. Branch `feature/port-fixes`.

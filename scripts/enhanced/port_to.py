@@ -3,7 +3,8 @@
     python -I scripts/enhanced/port_to.py TARGET --product longshot [--ref enhanced/main] [--base v2.3.1] [--apply]
 
 TARGET is a clean git checkout of the other fork (its Enhanced branch). --product names a profile in
-scripts/enhanced/products/ (or a JSON file): the target's names (its options file, switch prefix, stores, saves script).
+scripts/enhanced/products/ (or a JSON file): the target's names (its options file, switch prefix, stores, saves script)
+and its menu's Graphics rows.
 Without --apply nothing in TARGET changes: the port is made in a throwaway worktree of TARGET and reported.
 
 What a port does, from --ref of this repository (a commit, not the working tree):
@@ -84,6 +85,9 @@ def load_profile(name):
     for k in KEYS:
         if not re.fullmatch(r"[A-Za-z0-9_.-]+", profile[k]):
             raise Fail("%s: %s is not a plain name: %r" % (path, k, profile[k]))
+    keys = profile.get("graphics_keys")
+    if not isinstance(keys, list) or not keys or not all(isinstance(k, str) and re.fullmatch(r"[a-z0-9_-]+", k) for k in keys):
+        raise Fail("%s: graphics_keys must list the Graphics rows' option keys" % path)
     if not profile["env_prefix"].startswith(profile["store_env_prefix"].split("_")[0] + "_"):
         raise Fail("%s: env_prefix must start with the product's own prefix, the one its env file takes" % path)
     return profile
@@ -107,6 +111,17 @@ def product_py(text, p):
                       lambda m: 'VERSION_FILES = ("%s", os.path.join("bin", "%s"))' % (v, v), text, flags=re.M)
     if n != 1:
         raise Fail("%s: no single VERSION_FILES to set" % PRODUCT_PY)
+    keys = ", ".join('"%s"' % k for k in p["graphics_keys"])
+    lines, line = [], "   "
+    for word in keys.split(" "):   # (wrapped at 120 columns, as the file is)
+        if len(line) + 1 + len(word) > 120:
+            lines.append(line)
+            line = "   "
+        line += " " + word
+    block = "GRAPHICS_KEYS = (\n" + "\n".join(lines + [line]) + ",\n)"
+    text, n = re.subn(r"^GRAPHICS_KEYS = \(\n.*?\n\)", lambda m: block, text, flags=re.M | re.S)
+    if n != 1:
+        raise Fail("%s: no single GRAPHICS_KEYS to set" % PRODUCT_PY)
     return text
 
 

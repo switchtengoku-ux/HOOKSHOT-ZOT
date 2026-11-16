@@ -33,7 +33,7 @@ def make_game(game, tag, slot_names=("slot_00", "slot_01")):
         (save / s).mkdir(exist_ok=True)
         (save / s / "progress.sav").write_bytes(b"progress-" + tag + s.encode())
         (save / s / "caption.sav").write_bytes(b"caption-" + tag + s.encode())
-    (game / "hookshot_version.txt").write_text("version=v2.3.1\n", encoding="utf-8")
+    (game / zot.product.VERSION_FILES[0]).write_text("version=v2.3.1\n", encoding="utf-8")
     return save
 
 
@@ -73,7 +73,7 @@ class SaveManagerTests(unittest.TestCase):
         self.assertTrue(ident.endswith("-first"))
         snap = self.store / ident
         m = json.loads((snap / "manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(m["format"], "hookshot-zot-snapshot")
+        self.assertEqual(m["format"], zot.FORMAT)
         self.assertEqual(m["profile"], UID)
         self.assertEqual(m["game_version"], "v2.3.1")
         self.assertEqual({e["path"] for e in m["files"]}, set(tree(self.save)))
@@ -190,13 +190,13 @@ class SaveManagerTests(unittest.TestCase):
 
     def manifest(self, files):
         import hashlib
-        return {"format": "hookshot-zot-snapshot", "version": 1, "files": [
+        return {"format": zot.FORMAT, "version": 1, "files": [
             {"path": k, "size": len(v), "sha256": hashlib.sha256(v).hexdigest()} for k, v in files.items()]}
 
     def test_import_refuses_unsafe_or_wrong_zips(self):
         good = {"account.sav": b"a", "slot_00/progress.sav": b"p"}
         cases = {
-            "../evil.sav": self.bad_zip({"../evil.sav": b"x"}, {"format": "hookshot-zot-snapshot", "version": 1, "files": []}, "dots"),
+            "../evil.sav": self.bad_zip({"../evil.sav": b"x"}, {"format": zot.FORMAT, "version": 1, "files": []}, "dots"),
             "absolute": self.bad_zip({"/etc/x": b"x"}, self.manifest({}), "absolute"),
             "not a save file": self.bad_zip({"hookshot.exe": b"x"}, self.manifest({}), "exe"),
             "no manifest": self.bad_zip(good, None, "nomanifest"),
