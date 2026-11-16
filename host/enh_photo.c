@@ -83,6 +83,10 @@ static void set_frozen(int on) {
 /* Each present (hos_wide_ui_tick): F6 and F7, pressed while the game has the focus; the test file */
 void hos_enh_photo_tick(void) {
     switches();
+    {   /* (enhanced) the HUD editor's settings (host/enh_hud.c) */
+        void hos_enh_hud_tick(void);
+        hos_enh_hud_tick();
+    }
     {   /* (the photo mode, the renderer's: its change remakes the panes, as the HUD switch does) */
         const int on = rx_option(HOS_OPT_ENH_PHOTO, 0) != 0;
         if (on != photo_on) {
@@ -142,6 +146,10 @@ static int guest_name_is(uint64_t g, const char *want) {
 /* A pane's transform just made (host/hos_wide_ui.c hos_wide_ui_placed, before its own moves): a HUD layout's root made a
    point while the HUD is hidden */
 void hos_enh_hud_placed(Ctx *c, uint64_t pane, uint64_t parent) {
+    {   /* (enhanced) the HUD editor's moves, sizes and opacities (host/enh_hud.c) */
+        void hos_enh_hud_edit(Ctx *c, uint64_t pane, uint64_t parent);
+        hos_enh_hud_edit(c, pane, parent);
+    }
     if (!(hud_hidden || photo_on) || parent || !pane) return;
     const uint64_t layout = recomp_load64(c, pane + ENH_PANE_LAYOUT);
     const uint64_t res = layout ? recomp_load64(c, layout + ENH_LAYOUT_RES) : 0;

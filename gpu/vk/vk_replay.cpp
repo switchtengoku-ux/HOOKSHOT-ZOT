@@ -31,6 +31,7 @@
 #include <ctime>         // (enhanced) enh_photo_shot.inc
 #include <filesystem>
 #include "enh_photo.h"
+#include "enh_hud.h"     // (enhanced) the HUD editor's settings, for the host
 
 #include "vk_temporal.h"
 #include "vk_fsr3_inputs.h"   // (the camera jitter while AMD FSR 3.1 upscales)
@@ -6003,6 +6004,8 @@ void fill_replay_table(MkwVkRenderer& t) {
         if (id == HOS_OPT_ENH_MUSIC_VOLUME) return opts.enh_music_volume;   // (enhanced) host/enh_audio.c
         if (id == HOS_OPT_ENH_EFFECTS_VOLUME) return opts.enh_effects_volume;
         if (id == HOS_OPT_ENH_PHOTO) return enh_photo_on();   // (enhanced) host/enh_photo.c
+        if (id >= HOS_OPT_ENH_HUD && id < HOS_OPT_ENH_HUD + HOS_ENH_HUD_ELEMENTS * ENH_HUD_FIELDS)   // (enhanced) host/enh_hud.c
+            return enh_hud_value(id - HOS_OPT_ENH_HUD);
         if (id == HOS_OPT_TEXT_SIZE) return opts.text_size;
         if (id == HOS_OPT_CAMERA_SPEED) return opts.camera_speed;
         if (id == HOS_OPT_PROMPTS) return opts.prompts;

@@ -73,5 +73,4 @@ a larger Output resolution); no depth of field.
 
 ## Next
 
-- Phase 3, HUD editor: a menu page with each HUD element (hearts and magic, rupees, buttons, minimap, place name)
-  shown or hidden, its size and its offset, and back to the game's own.
+- Phase 3, the HUD editor: done, [HUD_EDITOR.md](HUD_EDITOR.md).
