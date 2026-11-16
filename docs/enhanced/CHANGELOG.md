@@ -32,3 +32,6 @@ Changes of the fork only. Upstream's are in [CHANGELOG.md](../../CHANGELOG.md).
 - Option IDs: the fork's move to 1000 and up, away from upstream's (its main already uses 59 to 71, where the
   fork's were); `tests/test_enh_option_ids.py` keeps them apart ([ARCHITECTURE.md](ARCHITECTURE.md)). Nothing changes for
   players. Branch `feature/option-ids`.
+- Porting tool: `scripts/enhanced/port_to.py` carries the Enhanced layer to another fork of the game (a dry run by
+  default; product profiles for Hookshot and Longshot), `tests/test_enh_port.py` ([PORTING.md](PORTING.md)). The audio
+  diagnostics' switch in `host/nn_audio.c` now goes through `enh_env`. Branch `feature/port-to`.

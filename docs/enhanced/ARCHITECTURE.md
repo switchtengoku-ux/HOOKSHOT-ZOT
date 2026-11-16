@@ -54,5 +54,8 @@ Nothing a player has changes: the switches, the stores and the photos' folder ke
 `hookshot_version` is still read). `tests/test_enh_product.py` fails when an Enhanced file names the product outside
 these two files, or when they disagree.
 
+`scripts/enhanced/port_to.py` carries the layer, these two files made from a product profile, and the hooks to another
+fork ([PORTING.md](PORTING.md)).
+
 Still per product, by design: the hooks in upstream files, the menu rows' texts (they must be literals in
 `gpu/vk/vk_menu.cpp`), `readme.md`'s rows, and `scripts/enhanced/build_windows.ps1`.
