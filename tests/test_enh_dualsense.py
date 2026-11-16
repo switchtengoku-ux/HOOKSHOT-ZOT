@@ -109,7 +109,7 @@ def main():
         assert '!strcmp(r.name, "%s")) return "%s";' % (row, key) in menu, "vk_menu.cpp: %s has no enh_ key" % row
         assert "if (id == %s) return opts.%s;" % (opt, field) in replay, "vk_replay.cpp does not answer %s" % opt
         assert opt in api, "vk_api.h has no %s" % opt
-    assert "HOS_OPT_ENH_LIGHTBAR = 61" in api, "the fork's option IDs start past upstream's reserved 60"
+    assert "HOS_OPT_ENH_LIGHTBAR = 1000" in api, "the pad rows' option IDs moved (tests/test_enh_option_ids.py)"
     with tempfile.TemporaryDirectory() as tmp:
         src, exe = Path(tmp) / "fixture.c", Path(tmp) / "fixture.exe"
         src.write_text(FIXTURE, encoding="utf-8")
