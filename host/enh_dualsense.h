@@ -31,12 +31,12 @@ static inline int enh_ds_kind(int sdl_version, int type) {
     return ENH_DS_NONE;
 }
 
-/* HOOKSHOT_ENH_LIGHTBAR: "hearts" (or 1) on, anything else (unset, "off", 0) off */
+/* <ENH_ENV_PREFIX>LIGHTBAR: "hearts" (or 1) on, anything else (unset, "off", 0) off */
 static inline int enh_ds_parse_lightbar(const char *v) {
     if (!v) return ENH_DS_LIGHTBAR_OFF;
     return !strcmp(v, "hearts") || !strcmp(v, "1") ? ENH_DS_LIGHTBAR_HEARTS : ENH_DS_LIGHTBAR_OFF;
 }
-/* HOOKSHOT_ENH_TRIGGERS: 1 or "light", 2 or "strong"; anything else off */
+/* <ENH_ENV_PREFIX>TRIGGERS: 1 or "light", 2 or "strong"; anything else off */
 static inline int enh_ds_parse_triggers(const char *v) {
     if (!v) return ENH_DS_TRIGGERS_OFF;
     if (!strcmp(v, "1") || !strcmp(v, "light")) return ENH_DS_TRIGGERS_LIGHT;

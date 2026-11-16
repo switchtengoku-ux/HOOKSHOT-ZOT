@@ -22,6 +22,7 @@
 #include <string.h>
 #include "hos_sdl.h"
 #include "enh_dualsense.h"
+#include "enh_product.h"   /* (enh_env: the switches' names) */
 #include "../gpu/vk/vk_api.h"   /* (HOS_OPT_ENH_*) */
 
 #define ENH_MAX_PADS 8
@@ -48,8 +49,7 @@ typedef struct { int lightbar, beat, triggers; } EnhSettings;
 
 static EnhSettings enh_settings(void) {
     if (env_lightbar == -2) {
-        const char *l = getenv("HOOKSHOT_ENH_LIGHTBAR"), *b = getenv("HOOKSHOT_ENH_LOW_LIFE_RUMBLE"),
-                   *t = getenv("HOOKSHOT_ENH_TRIGGERS");
+        const char *l = enh_env("LIGHTBAR"), *b = enh_env("LOW_LIFE_RUMBLE"), *t = enh_env("TRIGGERS");
         env_lightbar = l ? enh_ds_parse_lightbar(l) : -1;
         env_beat = b ? !(!strcmp(b, "0") || !strcmp(b, "off")) : -1;
         env_triggers = t ? enh_ds_parse_triggers(t) : -1;
@@ -65,7 +65,7 @@ static EnhSettings enh_settings(void) {
             hos_log("enhanced: PlayStation pads: lightbar %s, low-life pulse %s, adaptive triggers %s%s",
                     s.lightbar ? "hearts" : "off", s.beat ? "on" : "off",
                     s.triggers == ENH_DS_TRIGGERS_STRONG ? "strong" : s.triggers ? "light" : "off",
-                    env_lightbar >= 0 || env_beat >= 0 || env_triggers >= 0 ? " (hookshot_env.txt sets some)" : "");
+                    env_lightbar >= 0 || env_beat >= 0 || env_triggers >= 0 ? " (" ENH_ENV_FILE " sets some)" : "");
         logged = packed;
     }
     return s;

@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "enh_audio.h"
+#include "enh_product.h"   /* (enh_env: the switches' names) */
 #include "../gpu/vk/vk_api.h"   /* (HOS_OPT_ENH_*) */
 
 #define ENH_AUDIO_VOICES 512   /* (nn_audio.c MAX_VOICES) */
@@ -26,7 +27,7 @@ static signed char last_class[ENH_AUDIO_VOICES];
 static int ready;
 
 static int env_percent(const char *name) {
-    const char *v = getenv(name);
+    const char *v = enh_env(name);
     if (!v || !*v) return -1;
     const int p = atoi(v);
     return p < 0 ? 0 : p > ENH_AUDIO_MAX_PERCENT ? ENH_AUDIO_MAX_PERCENT : p;
@@ -34,9 +35,9 @@ static int env_percent(const char *name) {
 
 static void refresh(int64_t now) {
     if (env_music == -2) {
-        env_music = env_percent("HOOKSHOT_ENH_MUSIC_VOLUME");
-        env_effects = env_percent("HOOKSHOT_ENH_EFFECTS_VOLUME");
-        audio_log = getenv("HOOKSHOT_ENH_AUDIO_LOG") && atoi(getenv("HOOKSHOT_ENH_AUDIO_LOG")) != 0;
+        env_music = env_percent("MUSIC_VOLUME");
+        env_effects = env_percent("EFFECTS_VOLUME");
+        audio_log = enh_env("AUDIO_LOG") && atoi(enh_env("AUDIO_LOG")) != 0;
     }
     if (gains_ns && now - gains_ns < ENH_AUDIO_REFRESH_NS) return;
     gains_ns = now;
@@ -47,7 +48,7 @@ static void refresh(int64_t now) {
     if ((music << 8 | effects) != logged_percents) {
         if (logged_percents >= 0 || music != 100 || effects != 100)
             hos_log("enhanced: music volume %d%%, effects volume %d%%%s", music, effects,
-                    env_music >= 0 || env_effects >= 0 ? " (hookshot_env.txt sets some)" : "");
+                    env_music >= 0 || env_effects >= 0 ? " (" ENH_ENV_FILE " sets some)" : "");
         logged_percents = music << 8 | effects;
     }
 }

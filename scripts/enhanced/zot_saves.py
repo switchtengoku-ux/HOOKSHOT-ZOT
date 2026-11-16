@@ -1,20 +1,22 @@
-"""Hookshot Enhanced save manager: verified snapshots of Hookshot's saves, kept outside the game folder.
+"""Hookshot Enhanced save manager: verified snapshots of the game's saves, kept outside the game folder.
 
-    python -I scripts/enhanced/zot_saves.py snapshot --hookshot GAME [--label NAME] [--dry-run] [--force]
+    python -I scripts/enhanced/zot_saves.py snapshot --game GAME [--label NAME] [--dry-run] [--force]
     python -I scripts/enhanced/zot_saves.py list     [--profile ID]
     python -I scripts/enhanced/zot_saves.py verify   [SNAPSHOT ...]           (every snapshot when none is named)
-    python -I scripts/enhanced/zot_saves.py restore  SNAPSHOT --hookshot GAME [--dry-run] [--force]
+    python -I scripts/enhanced/zot_saves.py restore  SNAPSHOT --game GAME [--dry-run] [--force]
     python -I scripts/enhanced/zot_saves.py export   SNAPSHOT --zip FILE.zip
     python -I scripts/enhanced/zot_saves.py import   FILE.zip [--label NAME] [--dry-run]
     python -I scripts/enhanced/zot_saves.py prune    --keep N [--profile ID] [--dry-run]
-    --store DIR (any command): the snapshot store; default %LOCALAPPDATA%\\HookshotZOT\\snapshots on Windows,
-    $XDG_DATA_HOME/hookshot-zot/snapshots on Linux, or $HOOKSHOT_ZOT_SNAPSHOTS when set.
+    --game GAME: the game folder (Windows) or data folder (Linux); --hookshot is the same option.
+    --store DIR (any command): the snapshot store; default %LOCALAPPDATA%\\<store>\\snapshots on Windows,
+    $XDG_DATA_HOME/<store>/snapshots on Linux, or $<prefix>SNAPSHOTS when set (scripts/enhanced/enh_product.py:
+    HookshotZOT, hookshot-zot and HOOKSHOT_ZOT_ for Hookshot).
 
 A snapshot is a copy of one profile's save folder (account.sav, option.sav, slot_*/) with a manifest.json that lists
 every file's size and SHA-256. A snapshot is written into a hidden folder of the store, checked against its manifest and
 only then renamed into place, so a failed copy never leaves a snapshot that looks complete.
 
-restore checks the snapshot first, refuses while Hookshot or an emulator runs (--force skips that check), snapshots
+restore checks the snapshot first, refuses while the game or an emulator runs (--force skips that check), snapshots
 the current save (label "pre-restore") and checks that snapshot, then swaps the save folder's entries for the
 snapshot's with renames on the save's own disk (scripts/oot_saves.py swap_in) and checks the result against the
 manifest. The save folder ends up holding exactly the snapshot's files.
@@ -40,12 +42,13 @@ import tempfile
 import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-_spec = importlib.util.spec_from_file_location("oot_saves", os.path.join(os.path.dirname(HERE), "oot_saves.py"))
-oot = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(oot)
+_spec = importlib.util.spec_from_file_location("enh_product", os.path.join(HERE, "enh_product.py"))
+product = importlib.util.module_from_spec(_spec)   # (the product's names: scripts/enhanced/enh_product.py)
+_spec.loader.exec_module(product)
+oot = product.saves_module()
 
 Fail = oot.Fail
-FORMAT = "hookshot-zot-snapshot"
+FORMAT = product.SNAPSHOT_FORMAT   # (written; read: any of product.SNAPSHOT_FORMATS, the same save files)
 FORMAT_VERSION = 1
 MANIFEST = "manifest.json"
 LABEL = re.compile(r"[A-Za-z0-9_-]{1,40}$")
@@ -62,13 +65,7 @@ MAX_ENTRIES = 4096
 # ---- the store ----
 
 def default_store():
-    env = os.environ.get("HOOKSHOT_ZOT_SNAPSHOTS")
-    if env:
-        return env
-    if oot.WINDOWS:
-        base = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
-        return os.path.join(base, "HookshotZOT", "snapshots")
-    return os.path.join(oot.data_home(), "hookshot-zot", "snapshots")
+    return product.store(oot, "snapshots", "SNAPSHOTS")
 
 
 def sha256_file(path):
@@ -153,7 +150,7 @@ def read_manifest(snap):
             m = json.load(f)
     except (OSError, ValueError) as e:
         raise Fail("%s has no readable %s (%s)" % (snap, MANIFEST, e))
-    if not isinstance(m, dict) or m.get("format") != FORMAT or not isinstance(m.get("files"), list):
+    if not isinstance(m, dict) or not product.SNAPSHOT_FORMATS.match(str(m.get("format", ""))) or not isinstance(m.get("files"), list):
         raise Fail("%s: %s is not a snapshot manifest" % (snap, MANIFEST))
     if m.get("version") != FORMAT_VERSION:
         raise Fail("%s: snapshot format %r, this tool reads %d" % (snap, m.get("version"), FORMAT_VERSION))
@@ -264,20 +261,20 @@ def verify_snapshot(snap, manifest):
     return problems
 
 
-# ---- Hookshot's side ----
+# ---- the game's side ----
 
-def hookshot_save(args):
-    """(profile id, save folder, game folder) of Hookshot: --hookshot on Windows, as scripts/oot_saves.py finds it."""
-    _, found = oot.locate(oot.HOOKSHOT, args.hookshot, "--hookshot")
-    profile, folder = oot.pick(found, "Hookshot", "--profile <id>", args.profile)
+def game_save(args):
+    """(profile id, save folder) of the game: --game on Windows, as scripts/oot_saves.py finds it."""
+    _, found = oot.locate(product.program(oot), args.game, "--game")
+    profile, folder = oot.pick(found, product.PRODUCT, "--profile <id>", args.profile)
     return profile, folder
 
 
-def hookshot_version(game):
-    """The version line of the game folder's hookshot_version.txt (make_game.py writes it), or None."""
+def game_version(game):
+    """The version line of the game folder's version file (product.VERSION_FILES: make_game.py writes it), or None."""
     if not game:
         return None
-    for name in ("hookshot_version.txt", os.path.join("bin", "hookshot_version.txt")):
+    for name in product.VERSION_FILES:
         try:
             with open(os.path.join(game, name), encoding="utf-8", errors="replace") as f:
                 for line in f:
@@ -298,13 +295,13 @@ def refuse_running(args, what):
 
 
 def take_snapshot(args, store, label):
-    profile, folder = hookshot_save(args)
+    profile, folder = game_save(args)
     files = save_files(folder)
     if not files:
         raise Fail("%s holds no save files" % folder)
     fields = {"created": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
               "label": label, "profile": profile, "source": os.path.abspath(folder),
-              "hookshot_version": hookshot_version(args.hookshot)}
+              "product": product.PRODUCT, "game_version": game_version(args.game)}
     return write_snapshot(store, label, folder, files, fields, args.dry_run)
 
 
@@ -332,7 +329,8 @@ def cmd_list(args, store):
         size = sum(e["size"] for e in m["files"])
         print("  %s  profile %s, %d slot(s), %d file(s), %d KB%s%s" % (
             n, m.get("profile") or "?", len(slot_names), len(m["files"]), (size + 1023) // 1024,
-            ", Hookshot %s" % m["hookshot_version"] if m.get("hookshot_version") else "",
+            ", %s %s" % (m.get("product") or "game", version) if (version := m.get("game_version")
+                                                                       or m.get("hookshot_version")) else "",
             ", imported" if m.get("imported_from") else ""))
         shown += 1
     if not shown:
@@ -363,7 +361,7 @@ def cmd_restore(args, store):
     problems = verify_snapshot(snap, manifest)
     if problems:
         raise Fail("snapshot %s does not match its manifest, nothing was restored: %s" % (args.snapshot, "; ".join(problems)))
-    profile, dst = hookshot_save(args)
+    profile, dst = game_save(args)
     if manifest.get("profile") and str(manifest["profile"]).lower() != profile.lower():
         print("Note: snapshot %s is of profile %s, the save folder is profile %s" % (args.snapshot, manifest["profile"], profile))
     refuse_running(args, "restore")
@@ -544,8 +542,8 @@ def parser():
     sub = p.add_subparsers(dest="command", required=True)
 
     def game(q, required):
-        q.add_argument("--hookshot", metavar="GAME", required=required and oot.WINDOWS,
-                       help="Hookshot's game folder (Windows) or data folder (Linux)")
+        q.add_argument("--game", "--hookshot", dest="game", metavar="GAME", required=required and oot.WINDOWS,
+                       help="the game folder (Windows) or data folder (Linux)")
         q.add_argument("--profile", metavar="ID", help="the profile, when the game folder has several")
 
     q = sub.add_parser("snapshot", help="copy the current save into a new, checked snapshot")

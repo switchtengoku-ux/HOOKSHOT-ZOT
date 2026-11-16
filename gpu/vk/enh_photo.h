@@ -5,6 +5,7 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include "../../host/enh_product.h"   // (the product's names: ENH_PRODUCT, ENH_STORE_*)
 
 namespace mkwvk {
 int enh_photo_on();                 // (1 while the photo mode is on)
@@ -13,7 +14,7 @@ void enh_photo_toggle();
 void enh_photo_ask();               // (a photo of the next present)
 int enh_photo_take_ask();           // (the asks since the last call: the capture's side)
 void enh_photo_keys();              // (each present: F8 the photo mode, F9 a photo, while the game's window has the focus)
-std::string enh_photo_folder();     // (where photos go: Pictures\Hookshot, or $HOME/Pictures/Hookshot)
+std::string enh_photo_folder();     // (where photos go: Pictures\<ENH_PRODUCT>, or $HOME/Pictures/<ENH_PRODUCT>)
 void enh_photo_written(const std::string& path, bool ok);
 const char* enh_photo_said();       // (the menu's line about the last photo: "Photo saved." or why not; nullptr none)
 }   // namespace mkwvk

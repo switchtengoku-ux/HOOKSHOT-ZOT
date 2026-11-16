@@ -1,8 +1,9 @@
 // (enhanced) Hookshot Enhanced HUD editor, the renderer's side (enh_hud.h; docs/enhanced/HUD_EDITOR.md).
 // The settings of the HUD's elements (HOS_ENH_HUD_ELEMENTS, gpu/vk/vk_api.h) live here, apart from the menu's own options:
 // the menu's HUD rows show the element chosen (gpu/vk/enh_menu_hud.inc), the host reads them through the option callback.
-// enh_hud.ini, beside hookshot_options.ini: one "<element>.<field>=<value>" line each, written whole at each change.
+// enh_hud.ini, beside the options file: one "<element>.<field>=<value>" line each, written whole at each change.
 #include "enh_hud.h"
+#include "../../host/enh_product.h"   // (ENH_ENHANCED: the file's first line)
 #include "vk_api.h"
 #include "vk_paths.h"   // (game_module_path: the options file's folder)
 #include <algorithm>
@@ -40,7 +41,7 @@ void write_locked() {
     const std::string part = file + ".new";
     FILE* f = fopen(part.c_str(), "w");
     if (!f) return;
-    fprintf(f, "# Hookshot Enhanced HUD editor (the Insert menu's HUD rows): element.field=value\n");
+    fprintf(f, "# " ENH_ENHANCED " HUD editor (the Insert menu's HUD rows): element.field=value\n");
     for (int e = 0; e < HOS_ENH_HUD_ELEMENTS; e++)
         for (int k = 0; k < ENH_HUD_FIELDS; k++) fprintf(f, "%d.%d=%d\n", e, k, values[e][k]);
     const bool ok = fclose(f) == 0;
