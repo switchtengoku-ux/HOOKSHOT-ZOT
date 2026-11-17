@@ -2,7 +2,7 @@
 
 Changes of the fork only. Upstream's are in [CHANGELOG.md](../../CHANGELOG.md).
 
-## Unreleased (based on upstream v2.3.1)
+## Unreleased (based on upstream v2.3.2)
 
 - Save manager: `scripts/enhanced/zot_saves.py`, verified snapshots, safe restore, zip export/import, prune
   ([SAVE_MANAGER.md](SAVE_MANAGER.md)). Branch `feature/save-manager`.
@@ -38,3 +38,7 @@ Changes of the fork only. Upstream's are in [CHANGELOG.md](../../CHANGELOG.md).
 - Port fixes from the first port to Longshot: the Graphics rows a graphics profile holds are the product's own
   (`GRAPHICS_KEYS` in `enh_product.py`, `graphics_keys` in the product profiles; Longshot has no Texture detail),
   and the Enhanced tests no longer name Hookshot's files. Branch `feature/port-fixes`.
+- Upstream v2.3.2 merged in. Graphics profiles follow its Graphics tab: CRT filter and CRT lines are held, VRAM budget
+  is gone (an older profile's line is skipped; loading a profile gives the preset's mip trimming, as upstream does), and
+  the Upscaler lists Intel XeSS. Test baseline: 25 known failures on v2.3.2 ([TEST_BASELINE.md](TEST_BASELINE.md)).
+  Branch `sync/v2.3.2`.

@@ -1,7 +1,7 @@
 # Hookshot Enhanced (HOOKSHOT-ZOT): instructions for Claude
 
 This repository is **HOOKSHOT-ZOT**, a fork of [Hookshot](https://git.notrexed.dev/Hookshot/Hookshot) based on tag
-`v2.3.1`. Upstream's rules still apply: read [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md) first.
+`v2.3.2` (first `v2.3.1`). Upstream's rules still apply: read [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md) first.
 This file adds the fork's rules and overrides upstream where they conflict.
 
 ## Fork rules (override upstream)
@@ -38,7 +38,7 @@ This file adds the fork's rules and overrides upstream where they conflict.
 - Toolchain: the Hookshot Builder's own tools (`%LOCALAPPDATA%\HookshotBuilder\versions\v2.3.1\HookshotBuilder\tools`):
   llvm-mingw, its Python 3.14 (has numpy, zstandard, pillow), cpm, wgpu-native. See
   [docs/enhanced/BUILD_WINDOWS.md](docs/enhanced/BUILD_WINDOWS.md) and `scripts/enhanced/build_windows.ps1`.
-- Tests: `tests/run_all.py` with the builder's Python. v2.3.1 has **24 known failures on this PC**
+- Tests: `tests/run_all.py` with the builder's Python. v2.3.2 has **25 known failures on this PC**
   ([docs/enhanced/TEST_BASELINE.md](docs/enhanced/TEST_BASELINE.md)): a change must not add any.
 - Many tests read the source text: renaming or reshaping a function can break a far-away check.
 - **Never use `HOS_AUDIO_MUTE=1` for a driven run on Windows.** It calls `waveOutSetVolume(0)`, which sets the
