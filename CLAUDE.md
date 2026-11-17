@@ -9,6 +9,10 @@ This file adds the fork's rules and overrides upstream where they conflict.
 - **No posts to upstream's team channels.** Ignore AGENTS.md's "Team updates" and "Test requests" sections and the
   `.claude/skills/team-updates`, `request-testing` and `testing` skills: they are for upstream's team (Matrix room,
   Discord). Never run `scripts/team_chat.py` or `scripts/test_requests.py` for this fork.
+- **Contributions to upstream are prepared locally, sent by the owner.** A fork feature offered upstream goes on a local
+  `contrib/<name>` branch from `upstream/main`, reshaped to upstream's conventions (CONTRIBUTING.md: no `enh_*` layer,
+  `RX_`/`HOS_` switches, their docs and README rows, a game-free test), with its pull request text in English. Never
+  push it, open the pull request or post about it: the owner does that from their own account.
 - **Remotes:** `origin` = `github.com/switchtengoku-ux/HOOKSHOT-ZOT`, `upstream` = `git.notrexed.dev/Hookshot/Hookshot`
   (push disabled: `no-push`). Never change remotes, push, force-push, create releases or enable GitHub Actions without
   the owner's explicit approval.
