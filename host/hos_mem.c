@@ -90,7 +90,27 @@ uint64_t hos_sys_alloc(uint64_t size, uint64_t align) {
     return a;
 }
 
-uint64_t hos_region_alloc(uint64_t size, uint64_t align) {
+static uint64_t region_alloc(uint64_t size, uint64_t align, int commit);
+uint64_t hos_region_alloc(uint64_t size, uint64_t align) { return region_alloc(size, align, 1); }
+
+/* (hookshot, night 10/11) What the game maps in its address regions (AllocateMemoryPages / FreeMemoryPages above 4 GB), said
+   every 30 s at most: HOS_REGION_LOG=1 */
+static int64_t region_mapped, region_allocated, region_freed, region_kept;
+static void region_count(int64_t *what, int64_t by) { __atomic_fetch_add(what, by, __ATOMIC_RELAXED); }
+static void region_note(void) {
+    static int on = -1;
+    static int64_t last;
+    if (on < 0) on = env_on("HOS_REGION_LOG");
+    if (!on) return;
+    int64_t before = __atomic_load_n(&last, __ATOMIC_RELAXED);
+    const int64_t now = hos_now_ns();
+    if (now - before < 30000000000LL || !__atomic_compare_exchange_n(&last, &before, now, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) return;
+    hos_log("mem: address regions: %lld MB mapped by the game now (%lld MB mapped in all, %lld MB freed: %lld MB of it kept under GPU imports)",
+            (long long)(__atomic_load_n(&region_mapped, __ATOMIC_RELAXED) >> 20), (long long)(__atomic_load_n(&region_allocated, __ATOMIC_RELAXED) >> 20),
+            (long long)(__atomic_load_n(&region_freed, __ATOMIC_RELAXED) >> 20), (long long)(__atomic_load_n(&region_kept, __ATOMIC_RELAXED) >> 20));
+}
+
+static uint64_t region_alloc(uint64_t size, uint64_t align, int commit) {
     if (align < 0x1000) align = 0x1000;
     size = (size + 0xFFF) & ~0xFFFULL;
     LOCK();
@@ -133,7 +153,7 @@ uint64_t hos_region_alloc(uint64_t size, uint64_t align) {
         if (found < region_floor && found >= HOS_HEAP_BASE) region_floor = found;   /* (not the holes below) */
     }
     UNLOCK();
-    if (found) hos_commit(found, size);
+    if (found && commit) hos_commit(found, size);
     if (!found) hos_fatal(NULL, "address space exhausted (%#llx bytes asked, heap %#llx)", (unsigned long long)size,
                           (unsigned long long)hos_heap_size);
     return found;
@@ -183,6 +203,41 @@ int hos_regions(uint64_t (*out)[2], int cap) {
     return n;
 }
 
+/* (hookshot, night 10/11) The parts of [lo, hi) that no region holds now, in the address regions' part of the window,
+   decommitted: what the game mapped in regions it has freed since. The game frees a region without unmapping its pages first
+   (20.9 GB mapped and 52 MB unmapped over six areas, hs493), and a freed region's pages were only discarded: the regions'
+   commit stood at their whole span, 8 GB, for the ~2.9 GB mapped at a time. The Vulkan back end calls this under its pool
+   lock, for ranges none of its imports holds (vk_memory.cpp release_uncovered), so no page the GPU maps goes and no import is
+   made meanwhile; a region made since is not a gap, so a range freed and handed out again keeps its pages. Returns the bytes
+   given back */
+uint64_t hos_region_release_gaps(uint64_t lo, uint64_t hi) {
+#if defined(_WIN32) && !defined(__EMSCRIPTEN__)
+    uint64_t done = 0;
+    LOCK();
+    const uint64_t floor = region_floor < HOS_SPACE_END ? region_floor : HOS_SPACE_END;
+    if (lo < floor) lo = floor;
+    if (hi > HOS_SPACE_END) hi = HOS_SPACE_END;
+    lo = (lo + 0xFFF) & ~0xFFFULL, hi &= ~0xFFFULL;
+    /* (the regions are sorted by address, descending: the gaps of [lo, hi) from its top down) */
+    uint64_t top = hi;
+    for (int i = 0; i < nregions && top > lo; i++) {
+        const uint64_t a = regions[i].addr, b = (a + regions[i].size + 0xFFF) & ~0xFFFULL;
+        if (a >= top) continue;   /* (above what is left of the range) */
+        if (b < top) {
+            const uint64_t g = b > lo ? b : lo;
+            if (top > g && VirtualFree(GP(g), (SIZE_T)(top - g), MEM_DECOMMIT)) done += top - g;
+        }
+        top = a & ~0xFFFULL;
+    }
+    if (top > lo && VirtualFree(GP(lo), (SIZE_T)(top - lo), MEM_DECOMMIT)) done += top - lo;
+    UNLOCK();
+    return done;
+#else
+    (void)lo, (void)hi;
+    return 0;
+#endif
+}
+
 void hos_region_free(uint64_t addr) {
     uint64_t freed = 0, freed_size = 0;
     LOCK();
@@ -197,7 +252,12 @@ void hos_region_free(uint64_t addr) {
         }
     }
     UNLOCK();
-    if (freed_size) discard_pages(freed, freed_size);
+    if (freed_size) {
+        discard_pages(freed, freed_size);
+        /* (hookshot) and its pages given back, but for those a GPU import holds: those go when the import does */
+        extern void rx_guest_release(uint64_t lo, uint64_t hi);
+        rx_guest_release(freed, freed + freed_size);
+    }
 }
 
 /* ---- nn::os memory -------------------------------------------------------------------------------------- */
@@ -277,7 +337,21 @@ HLE(_ZN2nn2os19AllocateMemoryBlockEPmm) {
 /* nn::os::AllocateAddressRegion(unsigned long*, unsigned long) -> Result */
 HLE(_ZN2nn2os21AllocateAddressRegionEPmm) {
     HOS_TRACE_CALL("AllocateAddressRegion");
-    G64(ARG(0)) = hos_region_alloc(ARG(1), 0x10000);
+    /* (hookshot, night 10/11) A region the game asks for is address space only, as on the console: the game maps its pages
+       before it uses them (AllocateMemoryPages commits them), and a page touched without that is committed by the first-touch
+       handler (mkw_glue.c). OoT's "Resource Memory" thread asks for a region per resource (5078 in the first 100 s, 2194 of
+       them of 11 MB in a 3 minute walk) and maps what the console leaves it: 2923 MB once Kokiri Forest is loaded, the 9809 MB
+       of an application less its 6894 MB heap (HOS_REGION_LOG=1, hs492). Committed whole at their reservation, the regions
+       stood at 8 GB of commit (0x7e00000000 up, vmmap.ps1), the game's memory at 15.1 GB and the process at 29-30 GB after a
+       few areas: past what a 16 GB PC with a 24 GB page file holds without growing the file in play (hs483: pool imports
+       refused, then the device lost). A freed region's pages are given back (hos_region_release_gaps).
+       HOS_REGION_COMMIT=1: committed whole, as before */
+    static int whole = -1;
+    if (whole < 0) {
+        whole = env_on("HOS_REGION_COMMIT");
+        hos_log("mem: the game's address regions are committed %s", whole ? "whole (HOS_REGION_COMMIT)" : "as the game maps their pages");
+    }
+    G64(ARG(0)) = region_alloc(ARG(1), 0x10000, whole);
     RET(0);
 }
 
@@ -381,6 +455,8 @@ HLE(_ZN2nn2os19AllocateMemoryPagesEmm) {
            instead: only newly mapped pages read as zero. A commit leaves committed pages as they are and gives fresh
            ones zeroed; FreeMemoryPages decommits. */
         hos_commit(a, n);
+        region_count(&region_mapped, (int64_t)n), region_count(&region_allocated, (int64_t)n);
+        region_note();
     } else if (zero_all || end > (1ULL << 32) || end < a) {
         memset(GP(a), 0, n);
     } else {
@@ -427,7 +503,12 @@ HLE(_ZN2nn2os15FreeMemoryPagesEmm) {
         /* (pages the Vulkan back end imported, as part of a pool's 16 MB chunk, stay committed and are zeroed: the GPU
            still maps them, and decommitted pages under an import faulted the device. Read as zero, as freed pages) */
         extern int rx_guest_imported(uint64_t lo, uint64_t hi);
-        if (hi > lo && rx_guest_imported(lo, hi)) memset(GP(lo), 0, (size_t)(hi - lo));
+        region_count(&region_mapped, -(int64_t)ARG(1)), region_count(&region_freed, (int64_t)ARG(1));
+        region_note();
+        if (hi > lo && rx_guest_imported(lo, hi)) {
+            memset(GP(lo), 0, (size_t)(hi - lo));
+            region_count(&region_kept, (int64_t)(hi - lo));
+        }
 #if defined(_WIN32)
         else if (hi > lo) VirtualFree(GP(lo), (SIZE_T)(hi - lo), MEM_DECOMMIT);
 #else

@@ -4,6 +4,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <functional>
 
 namespace mkwvk {
@@ -23,6 +24,10 @@ bool jobs_wait(const std::atomic<bool>& flag);
 bool jobs_wait_for(const std::atomic<bool>& flag, double ms);
 /// (hookshot) Moves flag's job, still queued, to the queue's front, for the next free worker; whether it was queued
 bool jobs_hurry(const std::atomic<bool>& flag);
+/// (hookshot) Queues fn behind all other work: taken only when no other job waits (work made ahead, that nothing waits on yet)
+void jobs_push_background(std::function<void()> fn);
+/// (hookshot) Waits until flag is set, until deadline at most: whether the flag is set
+bool jobs_wait_until(const std::atomic<bool>& flag, std::chrono::steady_clock::time_point deadline);
 void jobs_notify();
 int jobs_pending();
 

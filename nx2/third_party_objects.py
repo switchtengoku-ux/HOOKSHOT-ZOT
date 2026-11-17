@@ -1,8 +1,7 @@
 """The third-party code's objects, compiled by the release (the AppImage's usr/share/hookshot/third_party_objects, the Windows
 zip's HookshotBuilder/tools/third_party_objects), so a player's first build, and a build after a change that empties the work
 folder's object cache, does not compile them: Eden's shader recompiler and sirit (gpu/vk/eden, gpu/vk/sirit), Dear ImGui,
-zbic's zstd (the Vulkan back end), libopus and zstd's decoder (the runtime), and on Windows suyu's recompiler and texture code
-under the WebGPU renderer (gpu/third_party/suyu, compiled when wgpu-native is there). Measured on a full first build: ~200 of the
+zbic's zstd (the Vulkan back end), libopus and zstd's decoder (the runtime). Measured on a full first build: ~200 of the
 ~325 CPU-seconds that are not the lifted game's own code. The renderer's own files (gpu/vk/*.cpp: DLSS, FSR 4 and the play
 profile are the player's), host/ and the lifted game are never in it, and nothing in it is made from the game.
 
@@ -42,10 +41,9 @@ MANIFEST = "manifest.json"
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # (the sources whose objects the set holds, by folder under the tools' root)
 # (build.py marks the jobs it builds as third-party, at THIRD_PARTY_CPU and with the stamp in their keys, by ending their headers
-# with the stamp: a job is in the set when it is marked so and its source is under one of these. gpu/third_party/suyu: the WebGPU
-# renderer's (Windows); the Vulkan back end's copies of its texture decoders are its own files, with its play profile)
-SOURCES = ("third_party/opus/", "third_party/zstd/", "third_party/imgui/", "third_party/zbic/", "gpu/vk/eden/", "gpu/vk/sirit/",
-           "gpu/third_party/suyu/")
+# with the stamp: a job is in the set when it is marked so and its source is under one of these. Not gpu/third_party/suyu: the
+# Vulkan back end compiles its texture decoders as its own files, with its play profile, and the WebGPU renderer is built no more)
+SOURCES = ("third_party/opus/", "third_party/zstd/", "third_party/imgui/", "third_party/zbic/", "gpu/vk/eden/", "gpu/vk/sirit/")
 
 # (what the probe preprocesses: the C library, the C++ library and, on Windows, windows.h. Their contents, not their paths)
 PROBE_C = "".join("#if __has_include(<%s>)\n#include <%s>\n#endif\n" % (h, h) for h in

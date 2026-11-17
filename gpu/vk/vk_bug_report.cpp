@@ -323,7 +323,7 @@ std::string redact(const std::string& line, const std::string& home, const std::
     return out;
 }
 
-std::string system_text() {
+std::string cpu_name() {
     std::string cpu;
 #if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
     {   // (the processor's own name, the same on every system)
@@ -346,6 +346,11 @@ std::string system_text() {
         cpu = trimmed(name);
     }
 #endif
+    return cpu;
+}
+
+std::string system_text() {
+    std::string cpu = cpu_name();
     if (cpu.empty()) cpu = "an unknown CPU";
     if (const unsigned n = std::thread::hardware_concurrency()) cpu += " (" + std::to_string(n) + " threads)";
     uint64_t ram = 0;

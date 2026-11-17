@@ -8,7 +8,11 @@
 #include <vk_mem_alloc.h>
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
 #include <cstdlib>
+#include <functional>
+#include <mutex>
+#include <thread>
 #include <vector>
 
 #ifndef HOOKSHOT_ENV_H   // (env_on: the switches' one rule)
@@ -191,11 +195,17 @@ bool image_compact_begin(uint64_t max_bytes_a_pass, uint32_t max_moves_a_pass) {
     return vmaBeginDefragmentation(vma, &di, &compact_ctx) == VK_SUCCESS;
 }
 bool image_compact_active() { return compact_ctx != VK_NULL_HANDLE; }
+void reap_pause();
+void reap_resume();
 bool image_compact_pass(std::vector<ImageMove>& moves, uint64_t* freed_bytes, uint32_t* freed_blocks) {
     moves.clear();
     if (!compact_ctx || compact_in_pass) return false;
+    reap_pause();   // (nothing is freed while a pass is open: the reaper holds its queue until the pass ends)
     const VkResult r = vmaBeginDefragmentationPass(vma, compact_ctx, &compact_pass);
-    if (r != VK_INCOMPLETE) return compact_over(freed_bytes, freed_blocks);   // (VK_SUCCESS: nothing left to move; or an error)
+    if (r != VK_INCOMPLETE) {   // (VK_SUCCESS: nothing left to move; or an error)
+        reap_resume();
+        return compact_over(freed_bytes, freed_blocks);
+    }
     compact_in_pass = true;
     for (uint32_t i = 0; i < compact_pass.moveCount; i++) moves.push_back({compact_pass.pMoves[i].srcAllocation});
     return true;
@@ -211,7 +221,9 @@ void image_compact_ignore(size_t i) {
 bool image_compact_pass_end(uint64_t* freed_bytes, uint32_t* freed_blocks) {
     if (!compact_ctx || !compact_in_pass) return false;
     compact_in_pass = false;
-    if (vmaEndDefragmentationPass(vma, compact_ctx, &compact_pass) == VK_INCOMPLETE) return true;
+    const VkResult r = vmaEndDefragmentationPass(vma, compact_ctx, &compact_pass);
+    reap_resume();
+    if (r == VK_INCOMPLETE) return true;
     return compact_over(freed_bytes, freed_blocks);
 }
 
@@ -254,8 +266,76 @@ bool create_image(const VkImageCreateInfo& ci, VkImage& image, VmaAllocation& al
     if (told++ < 4) logf("vk: VRAM full: a %ux%u image (format %d) in system memory", ci.extent.width, ci.extent.height, (int)ci.format);
     return true;
 }
+// (hookshot) The images are destroyed on a thread of their own (the reaper), and with them a dead texture's views, buffer and
+// memory (texture_frame). On NVIDIA's Windows driver a vmaDestroyImage is a kernel call of a millisecond or more, and the
+// render thread destroyed the dead textures one after the other as it presented: while the camera turned in the Market,
+// 2.4 ms of each frame over 25 ms against 0.1 ms of a normal one. Every caller hands over what the GPU is done with, so a
+// later destruction changes nothing but when the memory goes back. While a compaction pass is open (image_compact_pass to
+// image_compact_pass_end) the reaper holds its queue: nothing of the pool is freed under VMA's pass, as before.
+// RX_VK_REAP=0: on the caller's thread, as before
+namespace {
+std::mutex reap_mu;
+std::condition_variable reap_cv, reap_idle_cv;
+std::vector<std::function<void()>> reap_queue;   // (in order: a texture's views before its image)
+bool reap_busy = false;
+std::atomic<bool> reap_hold{false};
+bool reap_on() {
+    static const bool on = [] {
+        const char* e = getenv("RX_VK_REAP");
+        if (e && env_value_off(e)) return false;
+        std::thread([] {
+            std::vector<std::function<void()>> batch;
+            for (;;) {
+                {
+                    std::unique_lock lk(reap_mu);
+                    reap_cv.wait(lk, [] { return !reap_queue.empty() && !reap_hold.load(); });
+                    batch.swap(reap_queue);
+                    reap_busy = true;
+                }
+                size_t i = 0;
+                for (; i < batch.size() && !reap_hold.load(); i++) batch[i]();
+                {
+                    std::lock_guard lk(reap_mu);
+                    if (i < batch.size())   // (a pass opened meanwhile: the rest waits for its end, ahead of what came since)
+                        reap_queue.insert(reap_queue.begin(), std::make_move_iterator(batch.begin() + i),
+                                          std::make_move_iterator(batch.end()));
+                    reap_busy = false;
+                }
+                batch.clear();
+                reap_idle_cv.notify_all();
+            }
+        }).detach();
+        logf("vk: images destroyed on a thread of their own (RX_VK_REAP=0: on the caller's)");
+        return true;
+    }();
+    return on;
+}
+}
+void reap_pause() {
+    if (!reap_on()) return;
+    std::unique_lock lk(reap_mu);
+    reap_hold = true;
+    reap_idle_cv.wait(lk, [] { return !reap_busy; });   // (the destruction under way ends first)
+}
+void reap_resume() {
+    if (!reap_on()) return;
+    {
+        std::lock_guard lk(reap_mu);
+        reap_hold = false;
+    }
+    reap_cv.notify_one();
+}
+void reap(std::function<void()> fn) {
+    if (!reap_on()) return fn();
+    {
+        std::lock_guard lk(reap_mu);
+        reap_queue.push_back(std::move(fn));
+    }
+    reap_cv.notify_one();
+}
 void destroy_image(VkImage image, VmaAllocation allocation) {
-    vmaDestroyImage(vma, image, allocation);
+    if (!image && !allocation) return;
+    reap([image, allocation] { vmaDestroyImage(vma, image, allocation); });
 }
 uint64_t allocation_size(VmaAllocation allocation) {
     VmaAllocationInfo info{};
@@ -299,6 +379,11 @@ bool host_cached(VmaAllocation allocation) {
     VkMemoryPropertyFlags f = 0;
     if (allocation) vmaGetAllocationMemoryProperties(vma, allocation, &f);
     return (f & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != 0;
+}
+bool host_coherent(VmaAllocation allocation) {
+    VkMemoryPropertyFlags f = 0;
+    if (allocation) vmaGetAllocationMemoryProperties(vma, allocation, &f);
+    return (f & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
 }
 void flush_mapped(VmaAllocation allocation, uint64_t size) {
     if (size) vmaFlushAllocation(vma, allocation, 0, size);

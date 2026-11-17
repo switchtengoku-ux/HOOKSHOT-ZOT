@@ -53,6 +53,24 @@ static void commit_refused(uint64_t lo, uint64_t size, DWORD err) {
     }
 }
 
+/* (hookshot) Windows answers VirtualQuery (and the driver's import of a host pointer, vkAllocateMemory) with the run of
+   pages after the address that share its state and protection, found by walking them: ~2.3 ms a GB. The heap is one
+   committed run of many GB, so each import of a new GPU pool cost ~28-44 ms twice (query, then the driver's own) on the
+   replay thread: the 90-120 ms hitches on the way to Saria (hs168). One page every HOS_COMMIT_MARK_MB (64) of every
+   commit is made read-write-execute: the runs end there (scratchpad vqtest: 8 GB run 18.5 ms, broken every 256 MB
+   0.58 ms) and the game reads and writes those pages as before. A commit over them makes them read-write again, so
+   each commit marks its own range. HOS_COMMIT_MARK_MB=0: off */
+static void commit_marks(uint64_t lo, uint64_t hi) {
+    static uint64_t step = 1;
+    if (step == 1) {
+        const char *e = getenv("HOS_COMMIT_MARK_MB");
+        step = (e ? (uint64_t)atoll(e) : 64) << 20;
+    }
+    if (!step) return;
+    DWORD old;
+    for (uint64_t a = (lo + step - 1) / step * step; a + 4096 <= hi; a += step)
+        VirtualProtect(GP(a), 4096, PAGE_EXECUTE_READWRITE, &old);
+}
 /* 1: the range is committed; 0: it is not (outside the guest window, or refused: logged) */
 int hos_commit(uint64_t addr, uint64_t size) {
     if (!size) return 1;
@@ -66,6 +84,8 @@ int hos_commit(uint64_t addr, uint64_t size) {
         if (err == ERROR_COMMITMENT_LIMIT && commit_wait(GP(lo), (SIZE_T)(hi - lo))) return 1;
         commit_refused(lo, hi - lo, err);
         return 0;
+    } else {
+        commit_marks(lo, hi);   /* (hookshot) an RWX page every 64 MB of a commit: VirtualQuery's walks stay short */
     }
     return 1;
 }
@@ -97,7 +117,8 @@ static LONG CALLBACK commit_on_touch(EXCEPTION_POINTERS *info) {
        Windows only: Linux commits nothing lazily, its VirtualQuery stand-in calls every guest page committed and read-write, and
        its signal handler never sets 8, so there every SIGSEGV and SIGBUS in the window would be tried again forever, at 100% CPU,
        rather than reach report_crash) */
-    if (mbi.State == MEM_COMMIT && mbi.Protect == PAGE_READWRITE && rec->ExceptionInformation[0] != 8)
+    if (mbi.State == MEM_COMMIT && (mbi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)) &&
+        !(mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) && rec->ExceptionInformation[0] != 8)   /* (RWX: commit_marks' pages) */
         return EXCEPTION_CONTINUE_EXECUTION;
 #endif
     if (mbi.State != MEM_RESERVE) return EXCEPTION_CONTINUE_SEARCH;
@@ -203,6 +224,14 @@ static LONG WINAPI report_crash(EXCEPTION_POINTERS *info) {
             rec->NumberParameters > 1 && rec->ExceptionInformation[0] == 1 ? "write" : "read",
             (unsigned long long)addr, (unsigned long long)(addr - (uint64_t)A64_MEM), base ? base + 1 : name,
             (unsigned long long)(rip - (uint64_t)mod));
+    /* (hookshot) A write to guest 0 + 0x268 bytes at start-up: the game's own allocator had returned null (a 0x268-byte
+       object at 0x80c4afa0, then its memset), before the first area; why is not known yet. Its own code does not check: said
+       here what such a crash usually means, for the player and for us */
+    if (rec->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && rec->NumberParameters > 1 && addr >= (uint64_t)A64_MEM &&
+        addr - (uint64_t)A64_MEM < 0x100000)
+        hos_log("CRASH: the game used a null pointer (guest %#llx): its memory ran out or one of its files could not be read "
+                "as expected. Check the game files (a fresh dump, installed again) and keep the game folder on a local disk",
+                (unsigned long long)(addr - (uint64_t)A64_MEM));
 #ifdef _WIN32
     {   /* the host stack from the faulting frame (x64 unwind data), as module+offset (nx2/samap.py maps mkw.exe's) */
         CONTEXT ctx = *info->ContextRecord;
@@ -645,14 +674,64 @@ static DWORD WINAPI watch_thread(void *p) {
         hos_log("watch: done");
     }
 }
+/* (hookshot) The walk of a suspended thread's stack reads where its registers say the frames are. Caught between two
+   instructions, or in code whose unwind data does not describe what it does, they say nonsense and the read faulted under
+   RtlVirtualUnwind, on the sampler's own thread: the game closed in the middle of a measure (llvm-mingw builds: 5 sampling
+   tours of 6 ended so, hs2310 / hs2330, 90 to 210 s in; the log's "CRASH ... sample_all_thread"). The walk is tried now: an
+   access violation on this thread while it walks ends that sample's stack where it was (the frames found so far are kept)
+   and the sampling goes on; the log says how many when the sampling stops. */
+__attribute__((returns_twice)) int recomp_sj_setjmp(void **buf);          /* hos_setjmp.c */
+__attribute__((noreturn)) void hos_sj_longjmp(void **buf, int value);
+static HMODULE sa_mods[64];
+static char sa_modname[64][64];
+static int sa_nmods;
+static DWORD walk_tid;
+static volatile LONG walk_on, walk_faults;
+static volatile int walk_len;   /* the sample line's length after the last frame written whole */
+static void *walk_buf[32] __attribute__((aligned(16)));
+static LONG CALLBACK walk_guard(EXCEPTION_POINTERS *e) {
+    const DWORD code = e->ExceptionRecord->ExceptionCode;
+    if (!walk_on || GetCurrentThreadId() != walk_tid ||
+        (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_IN_PAGE_ERROR && code != EXCEPTION_GUARD_PAGE))
+        return EXCEPTION_CONTINUE_SEARCH;
+    walk_on = 0;
+    InterlockedIncrement(&walk_faults);
+    hos_sj_longjmp(walk_buf, 1);
+}
+__attribute__((noinline)) static void sample_walk(CONTEXT *ctx, char *line, int cap) {
+    int len = walk_len;
+    for (int depth = 0; depth < 16 && ctx->Rip && len < cap - 96; depth++) {
+        HMODULE m = NULL;
+        GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)ctx->Rip, &m);
+        int mi = -1;
+        for (int k = 0; k < sa_nmods; k++) if (sa_mods[k] == m) mi = k;
+        if (mi < 0 && sa_nmods < 64) {
+            mi = sa_nmods++;
+            sa_mods[mi] = m;
+            char mp[MAX_PATH] = "?";
+            if (m) GetModuleFileNameA(m, mp, MAX_PATH);
+            const char *b = strrchr(mp, '\\');
+            snprintf(sa_modname[mi], sizeof sa_modname[mi], "%s", b ? b + 1 : mp);
+        }
+        len += snprintf(line + len, cap - len, "%s%s+%llx", depth ? ";" : "", mi < 0 ? "?" : sa_modname[mi],
+                        (unsigned long long)(ctx->Rip - (uint64_t)m));
+        walk_len = len;
+        DWORD64 image = 0;
+        PRUNTIME_FUNCTION f = RtlLookupFunctionEntry(ctx->Rip, &image, NULL);
+        if (!f) break;
+        void *hd;
+        DWORD64 frame;
+        RtlVirtualUnwind(UNW_FLAG_NHANDLER, image, ctx->Rip, f, ctx, &hd, &frame, NULL);
+    }
+}
 static DWORD WINAPI sample_all_thread(void *p) {
     const char *path = (const char *)p;
     char go[MAX_PATH];
     snprintf(go, sizeof go, "%s.go", path);
     FILE *out = NULL;
-    static HMODULE mods[64];
-    static char modname[64][64];
-    int nmods = 0;
+    walk_tid = GetCurrentThreadId();
+    AddVectoredExceptionHandler(1, walk_guard);
     enum { MAXT = 128 };
     static HANDLE th[MAXT];
     static char tn[MAXT][64];
@@ -660,7 +739,11 @@ static DWORD WINAPI sample_all_thread(void *p) {
     int64_t t0 = 0;
     for (;;) {
         if (GetFileAttributesA(go) == INVALID_FILE_ATTRIBUTES) {
-            if (out) { fclose(out); out = NULL; hos_log("prof: all-thread sampling stopped"); }
+            if (out) {
+                fclose(out);
+                out = NULL;
+                hos_log("prof: all-thread sampling stopped (%ld stack walks cut short by a fault so far)", (long)walk_faults);
+            }
             Sleep(200);
             continue;
         }
@@ -703,34 +786,19 @@ static DWORD WINAPI sample_all_thread(void *p) {
         const long ms = (long)((hos_now_ns() - t0) / 1000000);
         for (int i = 0; i < nt; i++) {
             if (SuspendThread(th[i]) == (DWORD)-1) continue;
-            CONTEXT ctx = {0};
+            /* (static: not in a register across the walk's second return) */
+            static CONTEXT ctx;
+            static char line[1024];
+            memset(&ctx, 0, sizeof ctx);
             ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
             const BOOL got = GetThreadContext(th[i], &ctx);
-            char line[1024];
-            int len = snprintf(line, sizeof line, "%ld %s|", ms, tn[i]);
-            for (int depth = 0; got && depth < 16 && ctx.Rip && len < (int)sizeof line - 96; depth++) {
-                HMODULE m = NULL;
-                GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                                   (LPCSTR)ctx.Rip, &m);
-                int mi = -1;
-                for (int k = 0; k < nmods; k++) if (mods[k] == m) mi = k;
-                if (mi < 0 && nmods < 64) {
-                    mi = nmods++;
-                    mods[mi] = m;
-                    char mp[MAX_PATH] = "?";
-                    if (m) GetModuleFileNameA(m, mp, MAX_PATH);
-                    const char *b = strrchr(mp, '\\');
-                    snprintf(modname[mi], sizeof modname[mi], "%s", b ? b + 1 : mp);
-                }
-                len += snprintf(line + len, sizeof line - len, "%s%s+%llx", depth ? ";" : "", mi < 0 ? "?" : modname[mi],
-                                (unsigned long long)(ctx.Rip - (uint64_t)m));
-                DWORD64 image = 0;
-                PRUNTIME_FUNCTION f = RtlLookupFunctionEntry(ctx.Rip, &image, NULL);
-                if (!f) break;
-                void *hd;
-                DWORD64 frame;
-                RtlVirtualUnwind(UNW_FLAG_NHANDLER, image, ctx.Rip, f, &ctx, &hd, &frame, NULL);
+            walk_len = snprintf(line, sizeof line, "%ld %s|", ms, tn[i]);
+            if (got && recomp_sj_setjmp(walk_buf) == 0) {
+                walk_on = 1;
+                sample_walk(&ctx, line, (int)sizeof line);
             }
+            walk_on = 0;
+            line[walk_len] = 0;   /* (a faulted walk: the line ends after its last whole frame) */
             ResumeThread(th[i]);
             fprintf(out, "%s\n", line);
         }

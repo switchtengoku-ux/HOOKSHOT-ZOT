@@ -174,8 +174,11 @@ def builder_method(name):
     cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Builder")
     node = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == name)
     stages = next(n for n in tree.body if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "STAGES")
-    namespace = {"make_game": make_game, "time": time}
-    exec(compile(ast.Module(body=[stages, node], type_ignores=[]), str(BUILDER), "exec"), namespace)
+    # (the shaders' countdown: the game's "about N s left" lines, read by on_line)
+    left = [n for n in tree.body if (isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "PIPELINES_LEFT") or
+            (isinstance(n, ast.FunctionDef) and n.name == "pipelines_left_in")]
+    namespace = {"make_game": make_game, "time": time, "re": __import__("re")}
+    exec(compile(ast.Module(body=[stages] + left + [node], type_ignores=[]), str(BUILDER), "exec"), namespace)
     return namespace[name]
 
 
@@ -183,7 +186,7 @@ class LinuxBuilderTests(unittest.TestCase):
     def window(self):
         text = []
         return SimpleNamespace(stage_text=SimpleNamespace(set=text.append), bar=SimpleNamespace(configure=lambda **k: None),
-                               compile_started=None, eta=None, shaders_later=False), text
+                               compile_started=None, eta=None, shaders_later=False, shader_started=None), text
 
     def test_a_later_stage_clears_the_compiles_clock_and_countdown(self):
         on_line = builder_method("on_line")

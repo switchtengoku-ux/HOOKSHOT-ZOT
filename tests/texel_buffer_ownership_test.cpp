@@ -91,6 +91,7 @@ std::deque<DeadMirror> dead_mirrors;
 std::deque<DeadImport> dead_imports;
 uint64_t st_retired_imports_freed = 0, st_retired_import_bytes_freed = 0;
 uint64_t dead_import_bytes = 0;   // Retired allocations still count until their GPU work completes.
+uint64_t evicted_import_bytes = 0;
 std::deque<std::map<uint64_t, Pool>::node_type> evicted_pools;
 void logf(const char*, ...) {}
 const char* getenv(const char*) { return nullptr; }   // (unrelated diagnostic toggle in reap_mirrors)
@@ -199,7 +200,7 @@ void run(const std::string& test) {
             tex.d.width++; create_result = VK_ERROR_OUT_OF_HOST_MEMORY; assert(!get(tex));
             create_result = VK_SUCCESS; mapping = second_pool.lo; assert(get(tex)); assert(creates == 3);
         } else if (test == "retirement" || test == "reuse-handle") {
-            dead_imports.push_back({first_pool.buffer, {}, 4, 64, {}});
+            dead_imports.push_back({first_pool.buffer, {}, 4, 0, 64, {}});
             dead_import_bytes = 64;
             mem_completed = 3; reap_mirrors(); assert(live.count(first) && destroyed_buffers == 0);
             assert(dead_import_bytes == 64);

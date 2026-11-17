@@ -38,6 +38,8 @@ struct Inputs {
 
 /// The process's part of a report: system, env, current_log, home, user, windows, now
 void fill_here(Inputs& in);
+/// The processor's own name (cpuid's brand string: "AMD Ryzen 5 5600X 6-Core Processor"), "" when it has none (not x86)
+std::string cpu_name();
 /// CPU (and its threads), RAM and system, as the form asks: "13th Gen Intel(R) Core(TM) i9-13900K (32 threads), 94 GB,
 /// Arch Linux (Linux 7.2.15)"
 std::string system_text();

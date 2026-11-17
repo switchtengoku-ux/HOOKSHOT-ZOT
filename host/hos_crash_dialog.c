@@ -24,6 +24,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include "hos_crash_dialog.h"
 #include "hos_crash_record.h"
+#include "options_path.h"
 #include "../gpu/vk/compat/hookshot_env.h"
 #include <errno.h>
 #include <stdarg.h>
@@ -452,7 +453,7 @@ static const char *channel_of(const char *version) {
 /* ---- the report ---- */
 typedef struct Report {
     int verdict, stage, cause;
-    const char *record, *record_name, *dir;
+    const char *record, *record_name, *dir, *options;   /* (options: NULL, the game folder's) */
     const RunLog *log;
     const Who *who;
     char system[400], gpu[400], version[160];
@@ -499,9 +500,10 @@ static void put_switches(Buf *b) {
 }
 /* hookshot_options.ini's settings, key=value, a value only when it is a number, a size or on/off (a device's name is left
    out); not the controls' bindings, nor the file itself */
-static void put_options(Buf *b, const char *dir) {
-    char path[PATH_MAX_UTF8];
-    char *text = join(path, sizeof path, dir, "hookshot_options.ini") ? read_text(path, 256 << 10, NULL) : NULL;
+static void put_options(Buf *b, const char *options, const char *dir) {
+    char path[PATH_MAX_UTF8];   /* (the run's, in the user folder: host/options_path.c; not given, the game folder's) */
+    char *text = options ? read_text(options, 256 << 10, NULL)
+                         : join(path, sizeof path, dir, "hookshot_options.ini") ? read_text(path, 256 << 10, NULL) : NULL;
     if (!text) {
         put(b, "hookshot_options.ini: none (every Insert menu option at its default).\n");
         return;
@@ -553,7 +555,7 @@ static char *report_text(const Report *in, size_t *len) {
     putf(&b, "%s\n%s\n\n", in->log->facts.dlss[0] ? in->log->facts.dlss : "NVIDIA DLSS: not named in the log",
          in->log->facts.fsr4[0] ? in->log->facts.fsr4 : "AMD FSR 4: not named in the log");
     put(&b, "### Changes from the defaults\n\n");
-    put_options(&b, in->dir);
+    put_options(&b, in->options, in->dir);
     put_switches(&b);
     putf(&b, "\n### Crash record%s%s\n\n", in->record_name && in->record_name[0] ? ": " : "",
          in->record_name ? in->record_name : "");
@@ -855,7 +857,7 @@ static int box_serving(const char *title, const char *text, const char *const *b
 /* ---- the window, and Report ---- */
 typedef struct Shown {
     int verdict, stage, cause;
-    const char *dir, *record, *record_name;
+    const char *dir, *record, *record_name, *options;
     RunLog *log;
     Who who;
 } Shown;
@@ -896,7 +898,7 @@ static void report(const Shown *s) {
     Report in;
     memset(&in, 0, sizeof in);
     in.verdict = s->verdict, in.stage = s->stage, in.cause = s->cause;
-    in.record = s->record, in.record_name = s->record_name, in.dir = s->dir, in.log = s->log, in.who = &s->who;
+    in.record = s->record, in.record_name = s->record_name, in.dir = s->dir, in.options = s->options, in.log = s->log, in.who = &s->who;
     system_text(in.system, sizeof in.system);
     const HosCrashLog *f = &s->log->facts;
     if (f->gpu[0]) snprintf(in.gpu, sizeof in.gpu, "%s, %s", f->gpu, f->driver[0] ? f->driver : "driver not named in the log");
@@ -1015,7 +1017,7 @@ static int wait_game(const HosCrashArgs *a, int *have_exit, unsigned long *code)
 static int helper(const HosCrashArgs *a) {
     Shown s;
     memset(&s, 0, sizeof s);
-    s.dir = a->dir;
+    s.dir = a->dir, s.options = a->options;
     who_here(&s.who);
     RunLog *log = (RunLog *)calloc(1, sizeof *log);
     if (!log) return 0;
@@ -1185,6 +1187,7 @@ void hos_crash_watch_start(int argc, char **argv) {
         return;
     }
     const char *log_arg = log && log[0] ? log : "-";
+    const char *options_arg = hos_options_file()[0] ? hos_options_file() : "-";   /* (host/options_path.c: chosen before this) */
     char ledger[PATH_MAX_UTF8], pending[PATH_MAX_UTF8];
     if (ledger_path(dir, ledger, sizeof ledger) && pending_of(dir, pending, sizeof pending)) {
         char *shown = read_text(ledger, 64 << 10, NULL);
@@ -1195,8 +1198,8 @@ void hos_crash_watch_start(int argc, char **argv) {
             each_name(pending, newest_unshown, &pick);
             if (pick.name[0] && ledger_add(dir, pick.name, 0)) {
                 hos_log("crash window: %s was not shown after its run: shown now", pick.name);
-                const char *args[] = {HOS_CRASH_SHOW_ARG, pick.name, dir, log_arg};
-                spawn(args, 4, 1);
+                const char *args[] = {HOS_CRASH_SHOW_ARG, pick.name, dir, log_arg, options_arg};
+                spawn(args, 5, 1);
             }
             free(shown);
         }
@@ -1207,8 +1210,8 @@ void hos_crash_watch_start(int argc, char **argv) {
 #else
     snprintf(pid, sizeof pid, "%ld", (long)getpid());
 #endif
-    const char *args[] = {HOS_CRASH_WATCH_ARG, pid, run, dir, log_arg};
-    hos_log(spawn(args, 5, 0) ? "crash window: watching this run (HOS_CRASH_WATCH=0: off)"
+    const char *args[] = {HOS_CRASH_WATCH_ARG, pid, run, dir, log_arg, options_arg};
+    hos_log(spawn(args, 6, 0) ? "crash window: watching this run (HOS_CRASH_WATCH=0: off)"
                               : "crash window: its helper could not be started: a crash is shown at the next start");
 }
 

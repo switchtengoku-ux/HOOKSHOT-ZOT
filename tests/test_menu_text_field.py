@@ -27,6 +27,14 @@ RUN_ALL_ARGS = ["--cxx", "{cxx}"]
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def game_keys(hid):
+    """nn_hid.c's key() with what it calls now: hos_key_down (display.c's, here Windows' state: GetAsyncKeyState) and the
+    keys by their place on the keyboard (not used here)"""
+    nl = chr(10)
+    # (key() alone here: the game's keys by their place, pos and kpos, are the bindings', not this test's)
+    return "int hos_key_down(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }" + nl + block(hid, "static int key(")
+
+
 def block(text, marker):
     """The text from marker to the end of the brace block that follows it (a function, or a struct with its ;)"""
     start = text.index(marker)
@@ -616,7 +624,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="menu-text-") as tmp:
         compile_run(a.cxx, "c++", "c++20", MENU_FIXTURE.replace("@@TEXT_ENUMS@@", enums).replace("@@CUT@@", cut)
                     .replace("@@PAD_RAW@@", block(hid, "uint32_t hos_pad_raw("))
-                    .replace("@@GAME_KEY@@", block(hid, "static int key("))
+                    .replace("@@GAME_KEY@@", game_keys(hid))
                     .replace("@@PAD_POLL@@", pad_poll).replace("@@PAD_EDGE@@", pad_edge)
                     .replace("@@PAD_REPEAT@@", pad_repeat).replace("@@FOCUSED@@", focused), "menu", tmp)
         compile_run(a.cxx, "c", "c11", HOST_FIXTURE.replace("@@TEXT_ENUMS@@", enums).replace("@@CUT@@", host_cut), "host", tmp)

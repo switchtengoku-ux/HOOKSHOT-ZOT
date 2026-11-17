@@ -118,8 +118,9 @@ void enh_profile_load() {
         if (r.value == &opts.output_res) r.hi = last_choice();
         if (r.value == &opts.ultrawide) r.hi = aspect_last();
     }
-    opts.budget = 0;   // (the VRAM budget row's own, as when set on the row)
-    vram_budget_sync();
+    // (the mip trimming of the preset loaded, as the options file's load gives it to a file without memory_budget;
+    // the VRAM budgets themselves are the card's since v2.3.2, texture_budget.h and mirror_budget.h)
+    opts.budget = opts.preset > 0 && opts.preset != kAutoPreset ? opts.preset : 0;
     samplers_changed();
     temporal_reset_failure();
     menu_refresh = true;

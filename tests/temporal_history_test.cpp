@@ -23,7 +23,8 @@ struct State {
 struct Camera { float current[16]{}; };
 struct Decision { bool reset, motion; };
 
-Decision temporal(State& s, const Camera& cam, uint64_t now, bool fsr4_engine) {
+enum Engine { DLSS, FSR4, XESS };
+Decision temporal(State& s, const Camera& cam, uint64_t now, Engine engine) {
     const uint64_t last = s.last_frame;
     /* CHAIN_POLICY */
     (void)show_motion;
@@ -31,12 +32,15 @@ Decision temporal(State& s, const Camera& cam, uint64_t now, bool fsr4_engine) {
     /* CHAIN_SINK */
     struct { unsigned InReset; } ep{};
     struct { bool reset; } d{};
+    struct { unsigned resetHistory; } p{};
     /* DLSS_SINK */
     /* FSR4_SINK */
-    return {fsr4_engine ? d.reset : ep.InReset != 0, motion};
+    /* XESS_SINK */
+    return {engine == FSR4 ? d.reset : engine == XESS ? p.resetHistory != 0 : ep.InReset != 0, motion};
 }
-Decision dlss(State& s, const Camera& cam, uint64_t now = 100) { return temporal(s, cam, now, false); }
-Decision fsr4(State& s, const Camera& cam, uint64_t now = 100) { return temporal(s, cam, now, true); }
+Decision dlss(State& s, const Camera& cam, uint64_t now = 100) { return temporal(s, cam, now, DLSS); }
+Decision fsr4(State& s, const Camera& cam, uint64_t now = 100) { return temporal(s, cam, now, FSR4); }
+Decision xess(State& s, const Camera& cam, uint64_t now = 100) { return temporal(s, cam, now, XESS); }
 
 Decision fsr_format(State& s, const Camera& cam, uint64_t now = 100, int format = 122, bool psycho = false) {
     struct { int format; } input{format}; auto* in = &input;
@@ -55,7 +59,7 @@ void check(bool value, const char* why) {
 }
 void identity(float* p) { for (int i = 0; i < 16; ++i) p[i] = i % 5 == 0 ? 1.0f : 0.0f; }
 void policies(State& s, const Camera& camera, bool reset, uint64_t now = 100) {
-    for (auto call : {dlss, fsr4, fsr}) {
+    for (auto call : {dlss, fsr4, xess, fsr}) {
         const Decision d = call(s, camera, now);
         check(d.reset == reset, "wrong reset delivered to an upscaler");
         check(d.motion == !reset, "wrong motion eligibility");

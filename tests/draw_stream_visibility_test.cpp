@@ -126,6 +126,7 @@ void queue_flush_locked() {
     VkSubmitInfo2 si{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};si.commandBufferInfoCount=(uint32_t)pend.cbs.size();si.pCommandBufferInfos=pend.cbs.data();
     vkQueueSubmit2(dev.queue,1,&si,VK_NULL_HANDLE);pend.cbs.clear();
 }
+uint64_t occ_part_lo = UINT64_MAX, occ_part_hi = 0;   // (vk_replay.cpp, RX_VK_OCC_COPY: the recording's queries, forgotten at its submit)
 /* SUBMIT */
 struct Job { Recording* r;int inits=0;bool uploads=true; };
 void submit_segments(std::vector<Job>& jobs) {
@@ -146,7 +147,15 @@ static void write(Recording& r,size_t bytes,unsigned seed) {
 int main(int argc,char**argv) {
     require(argc==3,"fixture arguments");std::string mode=argv[1];coherent=std::string(argv[2])=="coherent";
     dev.props.limits.minUniformBufferOffsetAlignment=256;dev.props.limits.minStorageBufferOffsetAlignment=64;
+    // (first-stream-failure: the slot's first stream cannot be made, as when host-visible memory runs out at a recording's start)
+    fail_buffer=mode=="first-stream-failure";
     Recording a=recording(0);draw_begin_recording(0,a.cmd,1);
+    fail_buffer=false;
+    if(mode=="first-stream-failure") {
+        require(res[0].streams.empty() && !res[0].stream && res[0].si==0,"the slot has no stream");
+        submit_recording(a);require(!flushed && a.submitted,"a recording without a stream submits with nothing to flush");
+        std::puts("PASS: a recording whose first stream could not be made");return 0;
+    }
     if(mode=="empty") { submit_recording(a);require(!flushed,"empty recording must not flush old bytes");return 0; }
     write(a,701,1);
     if(mode=="grow" || mode=="reuse") {

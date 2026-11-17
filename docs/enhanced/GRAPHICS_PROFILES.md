@@ -29,10 +29,11 @@ spaces, `-` or `_`.
 
 ## What a profile holds
 
-The 28 keys the menu saves its Graphics rows under, in the menu's order (`GRAPHICS_KEYS`): Quality preset, Aspect
+The 29 keys the menu saves its Graphics rows under, in the menu's order (`GRAPHICS_KEYS`): Quality preset, Aspect
 ratio, Output resolution, Profile, Upscaler, DLSS model, Render resolution, Sharpness, Frame generation (and by),
-Frame pacing, Game frame rate cap, Reflex, Anti-Lag 2, Fullscreen, V-Sync, Window scaling filter, Ultrawide menus, the
-HDR rows, Texture detail, Anisotropic filtering, GPU device, Threaded rendering and VRAM budget.
+Frame pacing, Game frame rate cap, Reflex, Anti-Lag 2, Fullscreen, V-Sync, Window scaling filter, CRT filter, CRT
+lines, Ultrawide menus, the HDR rows, Texture detail, Anisotropic filtering, GPU device and Threaded rendering.
+Upstream v2.3.2 removed VRAM budget: a profile saved before it keeps its `vram_budget` line, which loading skips.
 `tests/test_enh_graphics.py` checks that list, the row names and the choices it shows (`ROWS`) against
 `gpu/vk/vk_menu.cpp`, so a row or a choice upstream adds or renames shows up as a failing test.
 

@@ -4,6 +4,7 @@
 #include "hos.h"
 #include "hos_paths.h"
 #include "hos_wide_size.h"
+#include "options_path.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -51,7 +52,7 @@ static const char *desired_language(void) {
                 if ((unsigned char)p[0] == 0xEF && (unsigned char)p[1] == 0xBB && (unsigned char)p[2] == 0xBF) p += 3;   /* (a BOM: Notepad's UTF-8) */
                 while (*p == ' ' || *p == '\t') p++;
                 if (*p == '#' || *p == '\r' || *p == '\n' || !*p) continue;
-                /* (only a code the game has: a stray line was taken before, and the game stayed in English, Hookshot issue 75) */
+                /* (only a code the game has: a stray line was taken before, and the game stayed in English) */
                 char code[32];
                 snprintf(code, sizeof code, "%s", p);
                 code[strcspn(code, " \t\r\n")] = 0;
@@ -88,15 +89,11 @@ HLE(_ZN2nn2oe18GetDesiredLanguageEv) {
    (MKW docked composes 3840 x 2160) */
 int hos_ini_option(const char *key, int otherwise);
 #define ini_option hos_ini_option
-/* (hookshot) An option's text in hookshot_options.ini, the game folder's (the Insert menu's choices, gpu/vk/vk_menu.cpp), the last
-   line that sets it, its line end cut: whether there was one */
+/* (hookshot) An option's text in hookshot_options.ini (the Insert menu's choices, gpu/vk/vk_menu.cpp; where it is:
+   host/options_path.c), the last line that sets it, its line end cut: whether there was one */
 static int ini_text(const char *key, char *out, size_t size) {
-    char path[MAX_PATH];
-    const DWORD n = hos_game_path_a(path, MAX_PATH);
-    char *slash = n ? (strrchr(path, 92) ? strrchr(path, 92) : strrchr(path, 47)) : NULL;   /* (linux: '/'; the game folder's, not bin\\'s) */
-    if (!slash || !size) return 0;
-    snprintf(slash + 1, (size_t)(path + MAX_PATH - slash - 1), "hookshot_options.ini");
-    FILE *f = fopen(path, "r");
+    if (!size) return 0;
+    FILE *f = fopen(hos_options_file(), "r");
     if (!f) return 0;
     char line[80];
     const size_t len = strlen(key);

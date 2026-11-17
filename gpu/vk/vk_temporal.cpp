@@ -1,5 +1,5 @@
 // (hookshot) A temporal upscaler in place of OoT's gameplay upscale network: the frame chain (vk_temporal.h), shared by the
-// engines that draw with it, NVIDIA DLSS (vk_dlss.cpp) and AMD FSR 4 (vk_fsr4.cpp).
+// engines that draw with it, NVIDIA DLSS (vk_dlss.cpp), AMD FSR 4 (vk_fsr4.cpp) and Intel XeSS (vk_xess.cpp).
 // The chain is hckrman101's, from their NVIDIA DLSS (#841): the camera, the inputs pass, the actor motion and the jitter's
 // state, moved here from vk_dlss.cpp unchanged in what they do, so that DLSS and FSR share them.
 //
@@ -30,7 +30,8 @@
 // encoding is unchanged: the HDR prep still squares it to linear, and a typed RGBA16F output pass writes it back as is.
 //
 // The Insert menu's Upscaler row (opts.dlss, upscaler_rows.h) chooses the engine; RX_VK_DLSS=1 / 2 (DLSS, DLAA) or
-// RX_VK_FSR4=1 / 2 (FSR 4, its native anti-aliasing) over it, and =0 takes that engine out for the run. AMD FSR 3.1
+// RX_VK_FSR4=1 / 2 (FSR 4, its native anti-aliasing) or RX_VK_XESS=1 / 2 (Intel XeSS, its Native AA) over it, and =0 takes
+// that engine out for the run. AMD FSR 3.1
 // (vk_fsr3.cpp, the row's value 3 or RX_VK_FSR=1) is an engine of this chain too (fsr3_engine, slot 2); with
 // RX_VK_FSR3_CHAIN=0 it has inputs of its own (vk_fsr3_inputs.cpp), and while it upscales so, this chain stands aside.
 // The row's Off (temporal_off) takes the same dispatches with no engine: the network's input, stretched to its output with
@@ -64,6 +65,8 @@
 #include "fsr3_math.h"   // (hookshot: FSR 3.1's depth constants from the projection)
 #include "vk_fsr3.h"   // (fsr3_wanted: AMD FSR 3.1 upscales with inputs of its own; fsr3_engine: on this chain)
 #include "vk_fsr4.h"
+#include "vk_xess.h"
+#include "xess_rules.h"
 #include "vk_menu.h"
 #include "vk_texture.h"
 
@@ -88,29 +91,34 @@ int env_switch(const char* name) {   // (-1: unset)
 namespace {
 int env_dlss() { static const int v = env_switch("RX_VK_DLSS"); return v; }   // (read at the first ask, as the others)
 int env_fsr4() { static const int v = env_switch("RX_VK_FSR4"); return v; }
+int env_xess() { static const int v = xess_rules::env_mode(getenv("RX_VK_XESS")); return v; }
 }  // namespace
 
 bool temporal_env_chosen() {
-    // (only where the engine asked for runs: else a saved FSR 3.1 stays, not the game's own. DLSS before FSR 4, as below)
+    // (only where the engine asked for runs: else a saved FSR 3.1 stays, not the game's own. DLSS before FSR 4 before XeSS,
+    // as below)
     if (env_dlss() > 0) return dlss_why() == DLSS_OK;
-    return env_fsr4() > 0 && fsr4_why() == FSR_OK;
+    if (env_fsr4() > 0) return fsr4_why() == FSR_OK;
+    return env_xess() > 0 && xess_why() == XESS_OK;
 }
 
 int temporal_mode() {
-    const int dlss = env_dlss(), fsr4 = env_fsr4();
+    const int dlss = env_dlss(), fsr4 = env_fsr4(), xess = env_xess();
     int v = opts.dlss;
     if (dlss > 0) v = dlss >= 2 ? ur::DLAA : ur::DLSS;   // (2 and up: DLAA, as RX_VK_DLSS was clamped before)
     else if (fsr4 > 0) v = fsr4 >= 2 ? ur::FSR4_AA : ur::FSR4;
+    else if (xess > 0) v = xess >= 2 ? ur::XESS_AA : ur::XESS;
     // (hookshot) FSR 3.1, the row's 3 or RX_VK_FSR=1, is an engine of this chain (vk_fsr3.h fsr3_on_chain): its inputs are the
     // chain's, the skinned draws' motion in them. A switch above goes over the row's FSR 3.1 (fsr3_chosen asks
     // temporal_env_chosen); RX_VK_FSR=1 goes over them
     if (fsr3_on_chain() && fsr3_chosen()) return ur::FSR3;
     // (with RX_VK_FSR3_CHAIN=0 FSR 3.1 upscales with its own inputs, vk_fsr3_inputs.cpp: the game's own as far as this chain is
     // concerned. Nor anything while it upscales: one upscaler at a time, and one camera jitter)
-    if (!ur::is_dlss(v) && !ur::is_fsr4(v)) return ur::GAME;
+    if (!ur::is_dlss(v) && !ur::is_fsr4(v) && !ur::is_xess(v)) return ur::GAME;
     if (fsr3_wanted()) return ur::GAME;
     if (ur::is_dlss(v) && dlss_why() != DLSS_OK) return ur::GAME;
     if (ur::is_fsr4(v) && fsr4_why() != FSR_OK) return ur::GAME;
+    if (ur::is_xess(v) && xess_why() != XESS_OK) return ur::GAME;
     return v;
 }
 bool temporal_wanted() { return temporal_mode() != ur::GAME; }
@@ -150,7 +158,7 @@ struct Engine {
 
 struct State {
     std::mutex mu;
-    Engine engines[3];               // (DLSS, FSR 4, FSR 3.1: engine_of)
+    Engine engines[4];               // (DLSS, FSR 4, FSR 3.1, XeSS: engine_of)
     const TemporalEngine* drawing = nullptr;   // (the engine that drew last: another one starts a new history)
     int drawn_mode = ur::GAME;
     bool dlaa_waiting = false;
@@ -261,13 +269,14 @@ void note_output(const Texture* out, uint32_t level) {
     s.out_h.store(std::max(1u, out->height >> level), std::memory_order_relaxed);
 }
 
-/// The chain's slot for the engine of an Upscaler value (DLSS and DLAA: DLSS's; FSR 4 and its native AA: FSR 4's; FSR 3.1;
-/// temporal_jitter_sample picks the same one)
+/// The chain's slot of an Upscaler value's engine (DLSS and DLAA: DLSS's, 0; FSR 4 and its native AA: FSR 4's, 1; FSR 3.1, 2;
+/// Intel XeSS and its Native AA: XeSS's, 3), which temporal_jitter_sample reads too
+int slot_of(int mode) { return ur::is_fsr4(mode) ? 1 : mode == ur::FSR3 ? 2 : ur::is_xess(mode) ? 3 : 0; }
 Engine& engine_of(int mode) {
     State& s = st();
-    const int slot = ur::is_fsr4(mode) ? 1 : mode == ur::FSR3 ? 2 : 0;
+    const int slot = slot_of(mode);
     Engine& k = s.engines[slot];
-    if (!k.e) k.e = slot == 1 ? fsr4_engine() : slot == 2 ? fsr3_engine() : dlss_engine();
+    if (!k.e) k.e = slot == 1 ? fsr4_engine() : slot == 2 ? fsr3_engine() : slot == 3 ? xess_engine() : dlss_engine();
     return k;
 }
 const char* name_of(int mode) {
@@ -277,6 +286,8 @@ const char* name_of(int mode) {
     case ur::FSR4: return "AMD FSR 4";
     case ur::FSR4_AA: return "AMD FSR 4 Native AA";
     case ur::FSR3: return "AMD FSR 3.1";
+    case ur::XESS: return "Intel XeSS";
+    case ur::XESS_AA: return "Intel XeSS Native AA";
     default: return "the game's own";
     }
 }
@@ -883,7 +894,7 @@ MkwVkJitter temporal_jitter_sample() {
     const int mode = temporal_mode();
     if (off || mode == ur::GAME || (mode == ur::FSR3 && fsr3_off)) return {};
     const uint64_t last = s.last_frame.load(std::memory_order_relaxed);
-    if (s.engines[ur::is_fsr4(mode) ? 1 : mode == ur::FSR3 ? 2 : 0].failed.load(std::memory_order_relaxed) || !last) return {};
+    if (s.engines[slot_of(mode)].failed.load(std::memory_order_relaxed) || !last) return {};
     return s.jitter.read(texture_frame_no());
 }
 
@@ -1183,14 +1194,15 @@ bool temporal_upscale(VkCommandBuffer cmd, uint64_t key, bool known, Texture* in
     }
     if (ready == 0) return fail(why ? why : "not this frame");
     if (psycho && (!engine.e->hdr || !engine.e->hdr()))
-        return fail(ur::is_fsr4(mode) ? "PsychoV35 waits for the native HDR FSR 4 context"
-                    : mode == ur::FSR3 ? "PsychoV35 waits for the native HDR FSR 3.1 path"
-                                       : "PsychoV35 waits for the native HDR DLSS feature");
+        return fail(ur::is_fsr4(mode)   ? "PsychoV35 waits for the native HDR FSR 4 context"
+                    : ur::is_xess(mode) ? "PsychoV35 waits for the native HDR XeSS context"
+                    : mode == ur::FSR3  ? "PsychoV35 waits for the native HDR FSR 3.1 path"
+                                        : "PsychoV35 waits for the native HDR DLSS feature");
     const bool rgba = psycho && in->format == VK_FORMAT_R16G16B16A16_SFLOAT && out->format == VK_FORMAT_R16G16B16A16_SFLOAT;
     if (s.psycho_last != psycho || s.history_input != in->format) {
         if (psycho || s.psycho_last || s.history_input == VK_FORMAT_R16G16B16A16_SFLOAT)
             logf("vk: PsychoV35 %s: %s route; scene format %u, network input %u, output %u",
-                 ur::is_fsr4(mode) ? "FSR 4" : mode == ur::FSR3 ? "FSR 3.1" : "DLSS",
+                 ur::is_fsr4(mode) ? "FSR 4" : ur::is_xess(mode) ? "XeSS" : mode == ur::FSR3 ? "FSR 3.1" : "DLSS",
                  rgba ? "RGBA16F linear" : "packed", (unsigned)cam.scene_format, (unsigned)in->format, (unsigned)out->format);
         s.psycho_last = psycho;
         s.history_input = in->format;

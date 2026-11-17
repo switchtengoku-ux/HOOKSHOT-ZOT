@@ -34,7 +34,7 @@
 #else
 #include "hos_sdl.h"
 #endif
-#include "hos_paths.h"   /* (the game folder: hookshot_options.ini, au_menu_output) */
+#include "options_path.h"   /* (hookshot_options.ini, au_menu_output) */
 #ifndef HOOKSHOT_ENV_H   /* (env_on: the switches' one rule) */
 #include "../gpu/vk/compat/hookshot_env.h"
 #endif
@@ -872,17 +872,12 @@ static int au_device_channels(void) {
 #else
 static int au_device_channels(void) { return hos_sdl_audio_channels(); }
 #endif
-/* (hookshot) The Insert menu's Audio output (gpu/vk/vk_menu.cpp): audio_output= in hookshot_options.ini beside the game,
+/* (hookshot) The Insert menu's Audio output (gpu/vk/vk_menu.cpp): audio_output= in hookshot_options.ini (host/options_path.c),
    0 Auto, 1 Stereo, 2 5.1, 3 Mono (stereo with a live final average). A number past them is the nearest, as the menu reads
    it. Read from the file, as host/nn_applet.c reads the Handheld profile: the game asks for its speakers only once,
    at its start */
 static int au_menu_output(void) {
-    char path[MAX_PATH];
-    const DWORD len = hos_game_path_a(path, MAX_PATH);
-    char *slash = len ? (strrchr(path, 92) ? strrchr(path, 92) : strrchr(path, 47)) : NULL;   /* (linux: '/') */
-    if (!slash) return 0;
-    snprintf(slash + 1, (size_t)(path + MAX_PATH - slash - 1), "hookshot_options.ini");
-    FILE *f = fopen(path, "r");
+    FILE *f = fopen(hos_options_file(), "r");
     if (!f) return 0;
     char line[80];
     int v = 0;
@@ -1092,6 +1087,7 @@ static void dump_finish(void) {
     fflush(dump);
 }
 static void output_frame(const int16_t *pcm) {
+    const int mixed = out_channels;   /* (renderer_main mixed this frame for the device open now) */
     if (dump) {
         fwrite(pcm, (size_t)(2 * out_channels), FRAME, dump);
         dump_bytes += (uint32_t)(FRAME * 2 * out_channels);
@@ -1115,6 +1111,7 @@ static void output_frame(const int16_t *pcm) {
             if (!wout) return;
         }
     }
+    if (out_channels != mixed) return;   /* (another channel count opened: this frame is dropped, the next is mixed for it) */
     for (int i = 0; i < FRAME * out_channels; i++) {
         const unsigned a = (unsigned)(pcm[i] < 0 ? -pcm[i] : pcm[i]);
         if (a > out_peak) out_peak = a;
@@ -1382,7 +1379,7 @@ static float audio_volume_curve(int percent) {
     const float v = (float)(percent < 0 ? 0 : percent > 100 ? 100 : percent) / 100.0f;
     return v * v;
 }
-/* The gain the menu asks for: Volume and Mute in background. With no menu (the WebGPU renderer) the game plays at full
+/* The gain the menu asks for: Volume and Mute in background. With no menu (no renderer) the game plays at full
    volume. */
 static float audio_player_gain(void) {
     int rx_option(int id, int otherwise);

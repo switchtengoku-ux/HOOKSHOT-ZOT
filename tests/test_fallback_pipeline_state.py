@@ -55,6 +55,7 @@ struct Program {
     std::vector<Stage> stages;
     VkPipelineLayout layout = VK_NULL_HANDLE;
 };
+bool program_modules_dropped(const Program&) { return false; }
 // Plain fields model the state consumed below; NVN's packed command ABI is not under test.
 struct nvn_va_st { uint32_t fmt = 0, stream = 0, offset = 0; };
 struct nvn_blend_st { uint32_t src_rgb = 0, dst_rgb = 0, eq_rgb = 0, src_a = 0, dst_a = 0, eq_a = 0; };
@@ -162,6 +163,7 @@ struct BufferRef {
 KeptVertex kept_vb[16]{};
 /* VERTEX_BIND_REUSE */
 /* VERTEX_SET_SAME */
+/* VERTEX_BIND_RANGE */
 unsigned vertex_binds = 0, pipeline_binds = 0, buffer_lookups = 0, binding_errors = 0;
 bool model_stride_valid = false;
 VkBuffer zero_buffer = reinterpret_cast<VkBuffer>(uintptr_t{1});
@@ -308,6 +310,7 @@ def main():
             ("KEPT_VERTEX", "struct KeptVertex {"),
             ("VERTEX_BIND_REUSE", "bool vertex_bind_reuse("),
             ("VERTEX_SET_SAME", "bool vertex_set_same("),
+            ("VERTEX_BIND_RANGE", "void vertex_bind_range("),
             ("BIND_PIPELINE", "if (pl != last_pipeline) {")]:
         extracted = block(source, marker) + (";" if marker.startswith("struct ") else "")
         cache = cache.replace("/* " + token + " */", extracted)

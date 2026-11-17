@@ -137,6 +137,7 @@ static bool restart_ask() { return false; }
 static int detect_pad_layout() { return 0; }
 static void dlss_probe() {}
 static void fsr4_probe() {}
+static void xess_probe() {}
 static void refresh_mics() {}
 // TX_MENU_SHORTCUT
 
@@ -194,6 +195,7 @@ static std::string ini_file;
 static std::string ini_path() { return ini_file; }
 static int parse_output(const char*) { return 0; }
 static std::string mic_want;
+[[maybe_unused]] static std::string gpu_saved_card;   // (menu_init reads gpu_device_id=: gpu_choice.h)
 [[maybe_unused]] static uint64_t auto_for = 0, auto_tuned = 0;   // (the Quality preset Auto (this PC)'s fingerprints, which save() writes)
 static struct { int steps = 0; bool went_down = false; } auto_tuning;   // (and its tuning's steps)
 static std::string mic_key(const char* name) { return name; }
@@ -215,10 +217,10 @@ static int loaded_as(int shortcut, int version, const char* toggles = "") {
     }
     opts = Options{};
     mic_want.clear();
-    bool has_options = false, has_vram_budget = false, has_memory_budget = false;
+    bool has_options = false, has_memory_budget = false;
     [[maybe_unused]] bool has_output = false;   // (menu_init's: an output_res= line read)
     // LOAD_OPTIONS
-    CHECK(has_options && !has_vram_budget && !has_memory_budget);
+    CHECK(has_options && !has_memory_budget);
     return opts.menu_shortcut;
 }
 

@@ -89,7 +89,8 @@ class GraphicsProfileTests(unittest.TestCase):
             return re.findall(r'"([^"]*)"', body[body.index("{", body.index("t")):body.index("};")])
         for key, fn in (("quality_preset", "tx_preset"), ("dlss", "tx_upscaler"), ("dlss_model", "tx_dlss_model"),
                         ("frame_rate_cap", "tx_fps_cap"), ("nvidia_reflex", "tx_reflex"), ("vsync", "tx_vsync"),
-                        ("upscaling", "tx_upscale"), ("ultrawide_menus", "tx_wide_menus"),
+                        ("upscaling", "tx_upscale"), ("crt_filter", "tx_crt_filter"), ("crt_lines", "tx_crt_lines"),
+                        ("ultrawide_menus", "tx_wide_menus"),
                         ("texture_detail", "tx_texture_detail"), ("anisotropic_filtering", "tx_anisotropy"),
                         ("vram_budget", "tx_vram_budget")):
             if key in zg.GRAPHICS_KEYS:   # (this product's rows: another product's menu may lack one)
@@ -135,10 +136,19 @@ class GraphicsProfileTests(unittest.TestCase):
 
     def test_apply_appends_missing_keys(self):
         (self.store).mkdir()
-        (self.store / "full.ini").write_text("vram_budget=5\nanisotropic_filtering=4\n", encoding="utf-8")
+        (self.store / "full.ini").write_text("threaded_rendering=2\nanisotropic_filtering=4\n", encoding="utf-8")
         self.assertEqual(self.cli("apply", "full", "--game", str(self.game))[0], 0)
         lines = self.ini.read_text(encoding="utf-8").splitlines()
-        self.assertEqual(lines[-2:], ["anisotropic_filtering=4", "vram_budget=5"])   # (the menu's order)
+        self.assertEqual(lines[-2:], ["anisotropic_filtering=4", "threaded_rendering=2"])   # (the menu's order)
+
+    def test_apply_skips_a_row_the_menu_lost(self):
+        # (a profile saved before an upstream release removed a row: v2.3.2's VRAM budget)
+        (self.store).mkdir()
+        (self.store / "old.ini").write_text("vram_budget=5\nanisotropic_filtering=4\n", encoding="utf-8")
+        self.assertEqual(self.cli("apply", "old", "--game", str(self.game))[0], 0)
+        lines = self.ini.read_text(encoding="utf-8").splitlines()
+        self.assertIn("anisotropic_filtering=4", lines)
+        self.assertFalse([l for l in lines if l.startswith("vram_budget=")])
 
     def test_dry_run_and_running_game_change_nothing(self):
         self.cli("save", "p", "--game", str(self.game))

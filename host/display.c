@@ -1,4 +1,4 @@
-/* The game's window (Windows): the renderer's surface (gpu/render/, WebGPU). The native NVN layer (nvn_native.c)
+/* The game's window (Windows): the renderer's surface (the Vulkan back end, gpu/vk). The native NVN layer (nvn_native.c)
    presents the game's window textures into it (rx_nvn_present). The title bar carries live numbers.
    TOTKPort's hos/display.c, without its emulated-GPU fallback (the window buffer read from guest memory): MKW has
    no emulated GPU, so the renderer is the only way to a picture.
@@ -17,6 +17,7 @@ void hos_input_clear_toggles(void);
 #include <string.h>
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include "hos_paths.h"   /* (hos_game_title: the game's own name, from its folder) */
 #include "../gpu/render/rx.h"
 void rx_close_asked(void);   /* host/rx_backend.c */
 #include "../gpu/vk/vk_api.h"
@@ -42,9 +43,38 @@ static volatile LONG mouse_dx, mouse_dy;
 static volatile LONG mouse_captured;
 static int cursor_hidden;
 
+/* (hookshot) HOS_MOUSE_TEST=<counts a second>: a test run has no mouse and its window is behind the others. With this the mouse
+   counts as captured and moves to the right at that rate, so a run can see whether the camera goes on turning (the mouse look
+   that stopped after a scene change, issue 2). 0 or unset: the real mouse alone. */
+static int mouse_test_rate(void) {
+    static int rate = -1;
+    if (rate < 0) {
+        const char *e = getenv("HOS_MOUSE_TEST");
+        rate = e ? atoi(e) : 0;
+        if (rate < 0) rate = 0;
+        if (rate) hos_log("mouse: a test's mouse, captured, %d counts a second to the right (HOS_MOUSE_TEST)", rate);
+    }
+    return rate;
+}
+int hos_mouse_test_on(void) { return mouse_test_rate() > 0; }   /* (nn_hid.c: read even while a script is the only input) */
+static int mouse_test(int32_t *dx) {
+    static int64_t last;
+    const int rate = mouse_test_rate();
+    if (rate <= 0) return 0;
+    const int64_t now = hos_now_ns();
+    if (!last) last = now;
+    const int64_t n = (now - last) * rate / 1000000000;
+    if (n > 0) {
+        last += n * 1000000000 / rate;
+        *dx += (int32_t)n;
+    }
+    return 1;
+}
+
 int hos_mouse_take(int32_t *dx, int32_t *dy) {
     *dx = InterlockedExchange(&mouse_dx, 0);
     *dy = InterlockedExchange(&mouse_dy, 0);
+    if (mouse_test(dx)) return 1;
     return mouse_captured;
 }
 
@@ -307,7 +337,56 @@ void hos_display_paste(void) {
     if (hwnd) PostMessageA(hwnd, WM_APP + 12, 0, 0);
 }
 
+/* (hookshot, issue 3: "not even the keyboard is recognized in the game ... I can press F1 to bring up the settings ... I can
+   press ESC to cancel changing a control, but I can't press any keyboard key")
+   The game's keys and the menu's key bindings were read by asking Windows for the keyboard's state (GetAsyncKeyState);
+   F1, Esc and the menu's own keys come as the window's messages. On that player's PC the messages arrived and the state
+   answered nothing (what a program that hides the keyboard's state from the others does, a key-logger guard for one; which
+   it was there is not known), and the game could not be played at all. The window now keeps the keys its own messages say are down, mouse buttons too, cleared when
+   it loses the focus; hos_key_down answers from them once Windows' state has been seen to answer nothing: three keys
+   pressed in the window that it called up, and none it called down. Where it answers, nothing changes. */
+static volatile unsigned char key_msg[256];
+static volatile LONG key_state_said, key_state_missed;
+static int key_state_deaf(void) { return key_state_missed >= 3 && !key_state_said; }
+static void key_note(unsigned vk, int down, int first) {
+    if (vk >= 256) return;
+    key_msg[vk] = (unsigned char)down;
+    if (!down || !first || vk < 8) return;   /* (the mouse's buttons are not asked about: a click is over by now more often) */
+    const int was_deaf = key_state_deaf();
+    if (GetAsyncKeyState((int)vk) & 0x8000) InterlockedIncrement(&key_state_said);
+    else InterlockedIncrement(&key_state_missed);
+    if (!was_deaf && key_state_deaf())
+        hos_log("hid: Windows says no key is down while keys reach the window (something hides the keyboard's state from "
+                "the game): the window's own key messages are used for the game's keys");
+}
+static void key_messages(UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN: key_note((unsigned)wp, 1, !(lp & (1 << 30))); break;
+    case WM_KEYUP:
+    case WM_SYSKEYUP: key_note((unsigned)wp, 0, 0); break;
+    case WM_LBUTTONDOWN: key_note(VK_LBUTTON, 1, 0); break;
+    case WM_LBUTTONUP: key_note(VK_LBUTTON, 0, 0); break;
+    case WM_RBUTTONDOWN: key_note(VK_RBUTTON, 1, 0); break;
+    case WM_RBUTTONUP: key_note(VK_RBUTTON, 0, 0); break;
+    case WM_MBUTTONDOWN: key_note(VK_MBUTTON, 1, 0); break;
+    case WM_MBUTTONUP: key_note(VK_MBUTTON, 0, 0); break;
+    case WM_XBUTTONDOWN: key_note(HIWORD(wp) == 1 ? VK_XBUTTON1 : VK_XBUTTON2, 1, 0); break;
+    case WM_XBUTTONUP: key_note(HIWORD(wp) == 1 ? VK_XBUTTON1 : VK_XBUTTON2, 0, 0); break;
+    case WM_KILLFOCUS: memset((void *)key_msg, 0, sizeof key_msg); break;
+    }
+}
+/* (nn_hid.c, the Insert menu through rx_backend.c) whether a key or a mouse button is down. HOS_KEY_MESSAGES=1: as on a PC
+   whose keyboard state answers nothing, from the window's messages alone (a test) */
+int hos_key_down(int vk) {
+    static int only = -1;
+    if (only < 0) only = env_on("HOS_KEY_MESSAGES");
+    if (!only && (GetAsyncKeyState(vk) & 0x8000)) return 1;
+    return (only || key_state_deaf()) && key_msg[vk & 255];
+}
+
 static LRESULT CALLBACK wndproc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
+    key_messages(msg, wp, lp);
     switch (msg) {
     case WM_MOUSEMOVE: {
         if (mouse_captured) return 0;
@@ -541,6 +620,11 @@ static DWORD WINAPI display_main(void *p) {
         AdjustWindowRect(&s, WS_OVERLAPPEDWINDOW, FALSE);
         SetWindowPos(hwnd, NULL, 0, 0, s.right - s.left, s.bottom - s.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
     }
+    {   /* the game's own name for the window (host/hos_paths.h hos_game_title), as Unicode: the class is an ANSI one */
+        wchar_t title[256];
+        if (MultiByteToWideChar(CP_UTF8, 0, hos_game_title(HOS_GAME_TITLE), -1, title, 256))
+            DefWindowProcW(hwnd, WM_SETTEXT, 0, (LPARAM)title);
+    }
     /* (no activate: shown at the bottom of the z-order, so a game in front keeps its focus) */
     if (noactivate)
         SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
@@ -551,7 +635,7 @@ static DWORD WINAPI display_main(void *p) {
     RegisterRawInputDevices(&rid, 1, sizeof rid);
     pointer_update(hwnd, 0, 0);
     renderer = rx_start(hwnd);
-    if (!renderer) hos_log("display: no WebGPU device: the window stays black");
+    if (!renderer) hos_log("display: no renderer: the window stays black");
     SetEvent(renderer_up);
     SetTimer(hwnd, 1, 250, NULL);
     MSG m;
@@ -573,6 +657,10 @@ void hos_renderer_wait(void) {
 void hos_display_start(void) {
     if (env_on("HOS_HEADLESS")) {   /* no window: the renderer still draws, offscreen (screenshots, frame dumps) */
         rx_start(NULL);
+        /* The renderer's startup may attach/free a console, which resets Windows' console handlers.
+           Install the stop route afterwards; it needs neither a rendered frame nor the game's input loop. */
+        int hos_windows_stop_start(void);
+        if (!hos_windows_stop_start()) hos_log("stop: windowless stop route unavailable; use the control bridge");
         return;
     }
     renderer_up = CreateEventA(NULL, TRUE, FALSE, NULL);

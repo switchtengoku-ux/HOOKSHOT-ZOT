@@ -28,6 +28,14 @@ ENV_ON_H = str(Path(__file__).resolve().parents[1] / "gpu" / "vk" / "compat" / "
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def game_keys(hid):
+    """nn_hid.c's key() with what it calls now: hos_key_down (display.c's, here Windows' state: GetAsyncKeyState) and the
+    keys by their place on the keyboard, pos and kpos (on this system: the US key itself)"""
+    nl = chr(10)
+    return ("int hos_key_down(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }" + nl + block(hid, "static int key(") + nl +
+            block(hid, "static int pos(") + nl + block(hid, "static int kpos("))
+
+
 def block(text, marker):
     start = text.index(marker)
     end = text.index("{", start) + 1
@@ -105,6 +113,13 @@ static const char *ini_dir;
 #endif
 static DWORD GetModuleFileNameA(void *m, char *b, DWORD n) { (void)m; return (DWORD)snprintf(b, n, "%s" EXE_SEP "hookshot.exe", ini_dir); }
 #define hos_game_path_a(b,n) GetModuleFileNameA(0,b,n)
+static const char *hos_options_file(void) {   /* (host/options_path.c: here, beside the exe) */
+    static char p[600];
+    DWORD n = GetModuleFileNameA(0, p, 560);
+    while (n && p[n - 1] != 92 && p[n - 1] != 47) n--;
+    snprintf(p + n, sizeof p - n, "hookshot_options.ini");
+    return p;
+}
 /* the keys held, the Insert menu (option 1), the Walk mode and Walk speed rows, the window in front */
 static int held[256], menu_open, walk_mode, walk_speed, front = 1;
 int rx_option(int id, int otherwise) {
@@ -112,15 +127,17 @@ int rx_option(int id, int otherwise) {
 }
 static short GetAsyncKeyState(int vk) { return held[vk & 255] ? (short)0x8000 : 0; }
 static int64_t hos_now_ns(void) { return 0; }
-/* read_input's other sources: no script, no control bridge, the window as front says */
+/* read_input's other sources: no script, no Skip title presses, no control bridge, the window as front says */
 static int npresses;
 static int64_t script_end_ms;
 static int64_t script_elapsed_ms(int64_t now) { (void)now; return 0; }
 static void scripted_input(uint64_t *b, int32_t s[4]) { (void)b; (void)s; }
+void hos_oot_autoload_input(void) {}   /* (host/oot_autoload.c: Skip title screen off) */
 int hos_control_input(uint64_t *buttons, int32_t stick[4]) { (void)buttons; (void)stick; return 0; }   /* (host/control.c: off) */
 static int game_in_front(void) { return front; }
 static volatile LONG pad_raw_now;
-static int pad_after_menu;   /* (main shares this state with the ocarina note word) */
+static uint64_t pad_after_menu, pad_raw_game;   /* (each pad input the Insert menu had, waiting: none here) */
+static uint64_t bound_pad_buttons(uint64_t raw) { (void)raw; return 0; }
 static void player_used(void) {}
 """
 
@@ -140,8 +157,7 @@ static int mouse_stick(int32_t *x, int32_t *y, int pointing) {
     *x = mouse_right[0], *y = mouse_right[1];
     return 1;
 }
-/* (the Skip title screen row's presses, host/oot_autoload.c: none; Hookshot's Auto run: Link the player's to move) */
-void hos_oot_autoload_input(void) {}
+/* (Hookshot's Auto run: Link the player's to move) */
 int hos_oot_player_free(void) { return 1; }
 """
 
@@ -240,6 +256,16 @@ static void defaults(void) {
     CHECK(near_share(st[1], WALK_SPEED_DEFAULT));
     held[VK_CAPITAL] = 0, poll(), held[VK_CAPITAL] = 1, poll();
     CHECK(st[1] == 32767);
+    /* Hold chosen in the Insert menu drops the toggled walk, also when Toggle is chosen again before it closes */
+    held[VK_CAPITAL] = 0, poll(), held[VK_CAPITAL] = 1, poll(), held[VK_CAPITAL] = 0, poll();   /* (on) */
+    CHECK(near_share(st[1], WALK_SPEED_DEFAULT));
+    menu_open = 1, walk_mode = 0, poll(), walk_mode = 1, poll();
+    menu_open = 0, poll();
+    CHECK(st[1] == 32767);
+    held[VK_CAPITAL] = 1, poll();   /* (a press of its own after it: on again) */
+    CHECK(near_share(st[1], WALK_SPEED_DEFAULT));
+    held[VK_CAPITAL] = 0, poll(), held[VK_CAPITAL] = 1, poll();   /* (off) */
+    CHECK(st[1] == 32767);
     held[VK_CAPITAL] = 0, poll(), held[VK_CAPITAL] = 1, poll(), held[VK_CAPITAL] = 0, poll();   /* (on, then Hold) */
     CHECK(near_share(st[1], WALK_SPEED_DEFAULT));
     /* back to Hold: walking only while the key is held */
@@ -312,7 +338,7 @@ class WalkKeyTests(unittest.TestCase):
         if not compiler:
             self.skipTest("no C compiler")
         hid = read("host", "nn_hid.c")
-        code = [block(hid, "enum { B_A"), block(hid, "static int key("), block(hid, "static int kmap_down("),
+        code = [block(hid, "enum { B_A"), game_keys(hid), block(hid, "static int kmap_down("),
                 between(hid, "static const char *const bind_names[HOS_KEY_N]", "void hos_bind("),
                 between(hid, "static int mouse_vk_slot(", "static int bound_down("), block(hid, "static void stick_max("),
                 block(hid, "static void oc_notes("),

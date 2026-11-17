@@ -1423,6 +1423,7 @@ class Window(QWidget):
         self.files_changed, self.files_compiled, self.compile_eta = -1, 0, -1.0
         self.this_compile, self.previous_total = 0, -1
         self.shaders_began, self.shaders_later, self.built_in = False, None, None
+        self.shader0, self.shader_fraction, self.shader_said, self.shader_said_at = None, 0.0, -1.0, 0.0
         self.show_page(self.build_page)
         self.cancel_button.show()
         self.set_progress(self.weight["read"][0] if self.updating else 0)
@@ -1452,6 +1453,7 @@ class Window(QWidget):
                 self.compile0 = time.monotonic()
             if sid == "shaders":
                 self.shaders_began = True
+                self.shader0 = time.monotonic()   # (its countdown: core.shader_left)
             if sid in self.weight:
                 self.set_progress(self.weight[sid][0])
         elif line.startswith("@@progress "):
@@ -1462,6 +1464,8 @@ class Window(QWidget):
             if self.current in self.weight:
                 if self.current == "compile":
                     self.compiled = f
+                if self.current == "shaders":
+                    self.shader_fraction = f
                 w = self.weight[self.current]
                 self.set_progress(w[0] + w[1] * max(0.0, min(1.0, f)))
             return
@@ -1472,6 +1476,8 @@ class Window(QWidget):
             self.finished = line[7:]
         elif NOT_PREPARED.match(line):
             self.shaders_later = shaders_note(NOT_PREPARED.match(line))
+        elif core.pipelines_left_in(line) >= 0:
+            self.shader_said, self.shader_said_at = core.pipelines_left_in(line), time.monotonic()
         elif self.FILES_LINE.match(line):
             self.files_of = int(self.FILES_LINE.match(line).group(1))
         elif self.FILE_LINE.match(line):
@@ -1531,7 +1537,15 @@ class Window(QWidget):
                     time_left(el / self.compiled * (1 - self.compiled) + 60) if self.compiled > 0.03 else "Estimating…")
             self.build_note.setText("Compiling %s · %s%s" % (clock(el), left, tail))
             return
-        self.build_note.setText(("Working…" if self.updating else "Usually about 45 minutes") + tail)
+        if self.current == "shaders" and getattr(self, "shader0", None):
+            # (the shaders' own countdown: on a slow PC this step alone can take an hour, and the line said "about 45 minutes")
+            now = time.monotonic()
+            s = core.shader_left(self.shader_said, now - self.shader_said_at if self.shader_said >= 0 else -1,
+                                 self.shader_fraction, now - self.shader0)
+            self.build_note.setText("Preparing shaders %s · %s%s" % (clock(now - self.shader0),
+                                                                     time_left(s) if s >= 0 else "Estimating…", tail))
+            return
+        self.build_note.setText(("Working…" if self.updating else "About 45 minutes on a fast PC, longer on a slower one") + tail)
 
     def ended(self, failure):
         self.clock.stop()

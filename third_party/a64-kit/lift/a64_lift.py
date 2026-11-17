@@ -952,11 +952,44 @@ static inline __m128i a64_v_ovf(const Ctx *c, __m128i a, __m128i b, __m128i t) {
     const __m128i inf = _mm_cmpeq_epi32(a64_v_abs(t), _mm_set1_epi32(0x7f800000));
     return _mm_andnot_si128(_mm_or_si128(a64_v_nonfin(a), a64_v_nonfin(b)), inf);
 }
-#define A64_VFPX_SUM(name, op, scalar) \
+/* (hookshot, 12/11) Lanes with a quiet NaN operand that need nothing else: no signalling NaN operand and, under FZ, no
+   subnormal one. Arm's result there is the first operand if it is a NaN, else the second (FPProcessNaNs), and no flag is
+   raised. Put into r from the operands themselves, so it does not depend on which operand the host's instruction keeps
+   when both are NaNs. Why: in OoT's cloth and collision code one lane of most vectors is a quiet NaN the game never
+   looks at; every such operation called a64_vfpx_..._fix (hs1424: all of its samples on this path). */
+static inline __attribute__((always_inline)) __m128i a64_v_qnan(const Ctx *c, __m128i a, __m128i b, __m128i *r) {
+    const __m128i q = _mm_set1_epi32(0x7fc00000), inf = _mm_set1_epi32(0x7f800000);
+    const __m128i qa = _mm_cmpeq_epi32(_mm_and_si128(a, q), q), qb = _mm_cmpeq_epi32(_mm_and_si128(b, q), q);
+    __m128i no = _mm_or_si128(_mm_andnot_si128(qa, _mm_cmpgt_epi32(a64_v_abs(a), inf)),
+                              _mm_andnot_si128(qb, _mm_cmpgt_epi32(a64_v_abs(b), inf)));   /* (a signalling NaN) */
+    if (RECOMP_FPX_FZ(c)) no = _mm_or_si128(no, _mm_or_si128(a64_v_subn(a), a64_v_subn(b)));
+    const __m128i ok = _mm_andnot_si128(no, _mm_or_si128(qa, qb));
+    const __m128i v = _mm_or_si128(_mm_and_si128(qa, a), _mm_andnot_si128(qa, b));
+    *r = _mm_or_si128(_mm_andnot_si128(ok, *r), _mm_and_si128(ok, v));
+    return ok;
+}
+static inline __m128i a64_v_put(__m128i r, uint32_t v, int j) {   /* lane j of r = v */
+    const __m128i at = _mm_cmpeq_epi32(_mm_set1_epi32(j), _mm_setr_epi32(0, 1, 2, 3));
+    return _mm_or_si128(_mm_andnot_si128(at, r), _mm_and_si128(at, _mm_set1_epi32((int)v)));
+}
+/* (hookshot, 12/11) a64_vfpx_..._fix: the gate open and some lanes out of the fast test (the bits of bad). Only those are
+   redone, with the easy helper, which gives Arm's result and flags for any operands (FPX_EASY_HEADER); the others keep
+   r, which the fast test made right lane by lane. Before, the four lanes went one by one through the outlined scalar
+   wrapper from a64_vfpx_..._lanes (kept for the gate shut): in OoT's cloth and collision code one lane of most vectors
+   is out, and that round trip was 10 % of the game threads' running time in the Lost Woods (hs1410, py/slowleaf.py). */
+#define A64_VFPX_SUM(name, op, scalar, sub) \
 static __attribute__((noinline, cold)) void a64_vfpx_##name##_lanes(Ctx *c, uint64_t *d, const uint64_t *n, const uint64_t *m, int k) { \
     uint32_t a[4], b[4], r[4] = {0}; memcpy(a, n, 16); memcpy(b, m, 16); \
     for (int j = 0; j < k; j++) r[j] = (uint32_t)scalar(c, a[j], b[j]); \
     memcpy(d, r, 16); } \
+static __attribute__((noinline)) void a64_vfpx_##name##_fix(Ctx *c, uint64_t *d, const uint64_t *n, const uint64_t *m, __m128i r, int bad, int k) { \
+    uint32_t x[4], y[4]; memcpy(x, n, 16); memcpy(y, m, 16); \
+    for (int j = 0; j < k; j++) { \
+        uint64_t v; \
+        if (!(bad >> j & 1)) continue; \
+        a64_fpx_easy_sum32(c, x[j], y[j], sub, &v); \
+        r = a64_v_put(r, (uint32_t)v, j); } \
+    if (k == 4) _mm_storeu_si128((__m128i *)d, r); else a64_vst_lo64(d, r); } \
 static inline __attribute__((always_inline)) void a64_vfpx_##name(Ctx *c, uint64_t *d, const uint64_t *n, const uint64_t *m, int k) { \
     if (RECOMP_LIKELY(RECOMP_FPX_OPEN(c))) { \
         const __m128i a = _mm_loadu_si128((const __m128i *)n), b = _mm_loadu_si128((const __m128i *)m); \
@@ -971,14 +1004,17 @@ static inline __attribute__((always_inline)) void a64_vfpx_##name(Ctx *c, uint64
                 bad = _mm_or_si128(bad, _mm_andnot_si128(_mm_or_si128(a64_v_big(t), a64_v_zero(t)), _mm_set1_epi32(-1))); \
             } \
         } \
-        const int lanes = k == 4 ? 0xFFFF : 0x00FF; /* (overflowed lanes looked at only once a lane is out) */ \
-        if (RECOMP_LIKELY(!(_mm_movemask_epi8(bad) & lanes)) || \
-            !(_mm_movemask_epi8(_mm_andnot_si128(a64_v_ovf(c, a, b, t), bad)) & lanes)) { \
+        const int lanes = k == 4 ? 0xFFFF : 0x00FF; /* (quiet NaN and overflowed lanes looked at only once a lane is out) */ \
+        if (!RECOMP_LIKELY(!(_mm_movemask_epi8(bad) & lanes))) \
+            bad =_mm_andnot_si128(_mm_or_si128(a64_v_qnan(c, a, b, &r), a64_v_ovf(c, a, b, t)), bad); \
+        if (RECOMP_LIKELY(!(_mm_movemask_epi8(bad) & lanes))) { \
             if (k == 4) _mm_storeu_si128((__m128i *)d, r); else a64_vst_lo64(d, r); \
-            return; } } \
+            return; } \
+        a64_vfpx_##name##_fix(c, d, n, m, r, _mm_movemask_ps(_mm_castsi128_ps(bad)) & (k == 4 ? 15 : 3), k); \
+        return; } \
     a64_vfpx_##name##_lanes(c, d, n, m, k); }
 #else
-#define A64_VFPX_SUM(name, op, scalar) \
+#define A64_VFPX_SUM(name, op, scalar, sub) \
 static __attribute__((noinline)) void a64_vfpx_##name(Ctx *c, uint64_t *d, const uint64_t *n, const uint64_t *m, int k) { \
     uint32_t a[4], b[4], r[4] = {0}; memcpy(a, n, 16); memcpy(b, m, 16); \
     for (int j = 0; j < k; j++) r[j] = (uint32_t)scalar(c, a[j], b[j]); \
@@ -990,6 +1026,18 @@ static __attribute__((noinline, cold)) void a64_vfpx_mul32_lanes(Ctx *c, uint64_
     uint32_t a[4], b[4], r[4]; memcpy(a, n, 16); memcpy(b, m, 16);
     for (int j = 0; j < 4; j++) r[j] = (uint32_t)a64_fpx_mul32_fma32(c, a[j], b[j], (a[j] ^ b[j]) & 0x80000000u);
     memcpy(d, r, 16); }
+#if RECOMP_FPX_HOST == 2
+static __attribute__((noinline)) void a64_vfpx_mul32_fix(Ctx *c, uint64_t *d, const uint64_t *n, const uint64_t *m, __m128i r, int bad) {
+    uint32_t x[4], y[4]; memcpy(x, n, 16); memcpy(y, m, 16);   /* (hookshot: as a64_vfpx_add32_fix) */
+    for (int j = 0; j < 4; j++) {
+        uint64_t v;
+        if (!(bad >> j & 1)) continue;
+        a64_fpx_easy_mul32(c, x[j], y[j], &v);
+        r = a64_v_put(r, (uint32_t)v, j);
+    }
+    _mm_storeu_si128((__m128i *)d, r);
+}
+#endif
 static inline __attribute__((always_inline)) void a64_vfpx_mul32(Ctx *c, uint64_t *d, const uint64_t *n, const uint64_t *m, int k) {
     (void)k;
 #if RECOMP_FPX_HOST == 2
@@ -1011,10 +1059,14 @@ static inline __attribute__((always_inline)) void a64_vfpx_mul32(Ctx *c, uint64_
                 r = _mm_or_si128(_mm_andnot_si128(tiny, t), _mm_and_si128(tiny, _mm_and_si128(t, _mm_set1_epi32((int)0x80000000u))));
             }
         }
-        if (RECOMP_LIKELY(!_mm_movemask_epi8(bad)) || !_mm_movemask_epi8(_mm_andnot_si128(a64_v_ovf(c, a, b, t), bad))) {
+        if (!RECOMP_LIKELY(!_mm_movemask_epi8(bad)))   /* (hookshot: quiet NaN lanes, then the overflowed ones) */
+            bad = _mm_andnot_si128(_mm_or_si128(a64_v_qnan(c, a, b, &r), a64_v_ovf(c, a, b, t)), bad);
+        if (RECOMP_LIKELY(!_mm_movemask_epi8(bad))) {
             _mm_storeu_si128((__m128i *)d, r);
             return;
         }
+        a64_vfpx_mul32_fix(c, d, n, m, r, _mm_movemask_ps(_mm_castsi128_ps(bad)));
+        return;
     }
 #endif
     a64_vfpx_mul32_lanes(c, d, n, m);
@@ -1104,6 +1156,93 @@ static inline __attribute__((always_inline)) int a64_fpx_sticky32(const Ctx *c, 
 }
 """
 
+# (hookshot, 2026-11-12) The operations the fast paths and the rescues above give up on, without the software body:
+# see the comment in the text.
+FPX_EASY_HEADER = r"""/* (hookshot, 12/11) What the fast paths give up on, done with the host's own arithmetic where Arm's result is known
+   without the software body (recomp_fpe_*): a NaN or an infinite operand, an invalid operation, an overflow, a
+   subnormal operand, a tiny result. Called inside the RECOMP_FPX_OPEN gate only (round to nearest, no trap enabled,
+   no default NaN, IXC raised already), after the fast tests have refused the operation. 1: *v is Arm's result and
+   FPSR has what Arm's operation raises; 0: not done (never, for these two: kept as a way out).
+   Why: in OoT's cloth and collision code (f_81c7f880 and its neighbours) a lane of most vectors holds a NaN or an
+   infinity the game never looks at, every vector operation left its fast path for it, and the software body ran for
+   that lane: 15.6 % of the game threads' running time in the Lost Woods, 20.2 % of the actors' threads' (hs1360,
+   py/slowfp.py). Tests (fpxtest.c: these two against recomp_fpe_add32 / _sub32 / _fma32,
+   every pair of 80 special values and 144 million checks in all; fpxtest2.c: the wrappers and the vector helpers that
+   call them, 66 million checks; results and FPSR the same). */
+#if RECOMP_FPX_HOST
+#define A64_EASY_NAN32(x) (((x) & 0x7fffffffu) > 0x7f800000u)
+#define A64_EASY_INF32(x) (((x) & 0x7fffffffu) == 0x7f800000u)
+/* (a NaN operand: the first signalling one, quieted, IOC; else the first quiet one, as it is) */
+static inline __attribute__((always_inline)) uint32_t a64_fpx_easy_nan32(uint32_t a, uint32_t b, uint32_t *fl) {
+    if (A64_EASY_NAN32(a) && !(a & 0x00400000u)) { *fl |= 1u; return a | 0x00400000u; }
+    if (A64_EASY_NAN32(b) && !(b & 0x00400000u)) { *fl |= 1u; return b | 0x00400000u; }
+    return A64_EASY_NAN32(a) ? a : b;
+}
+/* a + b (sub: a - b) */
+static inline __attribute__((always_inline)) int a64_fpx_easy_sum32(Ctx *c, uint64_t a0, uint64_t b0, int sub, uint64_t *v) {
+    uint32_t a = (uint32_t)a0, b = (uint32_t)b0, fl = 0, t;
+    const uint32_t fz = RECOMP_FPX_FZ(c);
+    if (fz) {   /* (a subnormal operand is a zero of its sign, IDC: before anything else is looked at) */
+        if (RECOMP_FPX_SUBN32(a)) a &= 0x80000000u, fl |= 0x80u;
+        if (RECOMP_FPX_SUBN32(b)) b &= 0x80000000u, fl |= 0x80u;
+    }
+    if (A64_EASY_NAN32(a) || A64_EASY_NAN32(b)) {
+        t = a64_fpx_easy_nan32(a, b, &fl);
+    } else {
+        if (sub) b ^= 0x80000000u;
+        if (A64_EASY_INF32(a) || A64_EASY_INF32(b)) {
+            if (A64_EASY_INF32(a) && A64_EASY_INF32(b) && ((a ^ b) & 0x80000000u)) t = 0x7fc00000u, fl |= 1u;   /* inf - inf */
+            else t = A64_EASY_INF32(a) ? a : b;
+        } else {
+            t = (uint32_t)recomp_fpx_fb(recomp_fpx_f(a) + recomp_fpx_f(b));
+            const uint32_t m = t & 0x7fffffffu;
+            if (m == 0x7f800000u) fl |= 4u | 16u;   /* (overflow: OFC and IXC) */
+            else if (fz && m != 0 && m < 0x00800000u) t &= 0x80000000u, fl |= 8u;   /* (tiny, exactly: flushed, UFC) */
+        }
+    }
+    c->fpsr |= fl;
+    *v = t;
+    return 1;
+}
+/* a * b */
+static inline __attribute__((always_inline)) int a64_fpx_easy_mul32(Ctx *c, uint64_t a0, uint64_t b0, uint64_t *v) {
+    uint32_t a = (uint32_t)a0, b = (uint32_t)b0, fl = 0, t;
+    const uint32_t fz = RECOMP_FPX_FZ(c);
+    if (fz) {
+        if (RECOMP_FPX_SUBN32(a)) a &= 0x80000000u, fl |= 0x80u;
+        if (RECOMP_FPX_SUBN32(b)) b &= 0x80000000u, fl |= 0x80u;
+    }
+    const uint32_t sign = (a ^ b) & 0x80000000u;
+    if (A64_EASY_NAN32(a) || A64_EASY_NAN32(b)) {
+        t = a64_fpx_easy_nan32(a, b, &fl);
+    } else if (A64_EASY_INF32(a) || A64_EASY_INF32(b)) {
+        if (RECOMP_FPX_ZERO32(a) || RECOMP_FPX_ZERO32(b)) t = 0x7fc00000u, fl |= 1u;   /* inf * 0 */
+        else t = sign | 0x7f800000u;
+    } else if (RECOMP_FPX_ZERO32(a) || RECOMP_FPX_ZERO32(b)) {
+        t = sign;
+    } else {
+        const float fa = recomp_fpx_f(a), fb = recomp_fpx_f(b), ft = fa * fb;
+        t = (uint32_t)recomp_fpx_fb(ft);
+        const uint32_t m = t & 0x7fffffffu;
+        if (m == 0x7f800000u) {
+            fl |= 4u | 16u;   /* (overflow) */
+        } else if (m <= 0x00800000u) {   /* (at most the smallest normal: tiny before rounding? the product is exact in binary64) */
+            const double p = (double)fa * (double)fb, ap = p < 0 ? -p : p;
+            if (ap < 0x1p-126) {
+                if (fz) t = sign, fl |= 8u;                 /* (flushed, UFC) */
+                else if ((double)ft != p) fl |= 8u | 16u;   /* (gradual, inexact: UFC) */
+            }
+        }
+    }
+    c->fpsr |= fl;
+    *v = t;
+    return 1;
+}
+#else
+static inline int a64_fpx_easy_sum32(Ctx *c, uint64_t a0, uint64_t b0, int sub, uint64_t *v) { (void)c; (void)a0; (void)b0; (void)sub; (void)v; return 0; }
+static inline int a64_fpx_easy_mul32(Ctx *c, uint64_t a0, uint64_t b0, uint64_t *v) { (void)c; (void)a0; (void)b0; (void)v; return 0; }
+#endif"""
+
 
 # Hot functions (A64_HOT_FUNCS=<file>: one function name a line, e.g. the hottest few hundred of a HOS_PROFILE_PCS or
 # HOS_PROFILE_ORDER profile; ~70% of TOTK's lifted-code time is in its 300 hottest) call the scalar FP helpers' inline
@@ -1146,15 +1285,19 @@ def fpx_header(used):
     out = ["/* Generated by a64_lift.py: one helper per FPX1 guard shape (see FPX_GUARD). A64_FPX_FN decides whether",
            "   the guard is inlined (fast code, slow compile) or called (default). */",
            "#ifndef A64_FPX_FN", "#define A64_FPX_FN static __attribute__((noinline))", "#endif",
-           FPX_FZ_HEADER]
+           FPX_FZ_HEADER, FPX_EASY_HEADER]
     for fast, exact, nf, ne in sorted(used):
         params = ", ".join("uint64_t a%d" % i for i in range(ne))
         # past the fast path, still inside its gate (tested once): the rescues above, else the exact body
         rescue = ""
         if (fast, exact) in (("mul32", "fma32"), ("fma32", "fma32")):
             rescue = "if (a64_fpx_sticky32(c, a0, a1, a2, %d, &v)) { A64_FPX_STICKY_PROBE(); return v; } " % (fast == "mul32")
+            if fast == "mul32":   # (hookshot: a multiply, asked for as a fused multiply-add of a zero of its sign)
+                rescue += ("if ((uint32_t)a2 == (((uint32_t)a0 ^ (uint32_t)a1) & 0x80000000u) && "
+                           "a64_fpx_easy_mul32(c, a0, a1, &v)) return v; ")
         elif fast in ("add32", "sub32"):
-            rescue = "if ((c->fpsr & 0xCu) && a64_fpx_fz_%s(c, a0, a1, &v)) return v; " % fast
+            rescue = ("if ((c->fpsr & 0xCu) && a64_fpx_fz_%s(c, a0, a1, &v)) return v; "
+                      "if (a64_fpx_easy_sum32(c, a0, a1, %d, &v)) return v; " % (fast, fast == "sub32"))   # (hookshot)
         out.append("A64_FPX_FN uint64_t a64_fpx_%s_%s(Ctx *c, %s) { uint64_t v; "
                    "if (RECOMP_FPX_OPEN(c)) { if (RECOMP_LIKELY(recomp_fpx_%s(%s, RECOMP_FPX_FZ(c), &v))) return v; %s} "
                    "return recomp_fpe_%s(c, %s); }" % (fast, exact, params, fast,
@@ -1170,9 +1313,9 @@ def fpx_header(used):
     if any(e[:2] in (("add32", "add32"), ("sub32", "sub32"), ("mul32", "fma32")) for e in used):
         out.append(VFPX_HEADER)
         if ("add32", "add32", 2, 2) in used:
-            out.append("A64_VFPX_SUM(add32, _mm_add_ps, a64_fpx_add32_add32)")
+            out.append("A64_VFPX_SUM(add32, _mm_add_ps, a64_fpx_add32_add32, 0)")
         if ("sub32", "sub32", 2, 2) in used:
-            out.append("A64_VFPX_SUM(sub32, _mm_sub_ps, a64_fpx_sub32_sub32)")
+            out.append("A64_VFPX_SUM(sub32, _mm_sub_ps, a64_fpx_sub32_sub32, 1)")
         if ("mul32", "fma32", 2, 3) in used:
             out.append(VFPX_MUL_HEADER)
     return "\n".join(out) + "\n"

@@ -330,6 +330,23 @@ def patch_glyph(source):
                       "extern void hos_prompts_glyph(uint64_t slot);\n")
 
 
+# (hookshot, after ProjectReLink, 2026-11-15) The game's zstd sequence loop (f_801102e0, ZSTD_decompressSequences_body of its
+# zstd 1.4) natively: most of the loading threads' time arriving in Hyrule Castle (host/zstd_native.c says what was measured:
+# 720 MB/s against 340 lifted). At the head of the lifted function, inside it (split_hot cuts the file at function heads: the
+# call travels with the function): the host runs the loop and the function returns, or (HOS_ZSTD_NATIVE=0) the lifted body
+# runs as before. The stream hook below (HOS_NATIVE_ZSTD=1, the host's libzstd for the whole stream) never reaches it
+ZSTD_SEQ_HEAD = "void f_801102e0(Ctx *__restrict A64_NOESC c) {\n"
+ZSTD_SEQ_CALL = ("    { extern int hos_zstd_seq(Ctx *, void (*)(Ctx *));   /* (nx2/oot_patches.py: host/zstd_native.c) */\n"
+                 "      if (hos_zstd_seq(c, f_801102e0)) return; }\n")
+
+
+def patch_zstd_seq(s):
+    """The native zstd sequence loop's call at the head of f_801102e0 (the supported build's: its address is that build's)"""
+    if ZSTD_SEQ_HEAD not in s or ZSTD_SEQ_CALL in s:
+        return None
+    return s.replace(ZSTD_SEQ_HEAD, ZSTD_SEQ_HEAD + ZSTD_SEQ_CALL, 1)
+
+
 ZSTD_HEAD = "void f_80115c80(Ctx *__restrict A64_NOESC c) {\n"
 ZSTD_CALL = "    if (hos_zstd_stream(c)) return;   /* (nx2/oot_patches.py: HOS_NATIVE_ZSTD, the host's libzstd) */\n"
 
@@ -345,6 +362,25 @@ def patch_zstd_stream(source):
         return source
     at = start + len(ZSTD_HEAD)
     return (source[:at] + ZSTD_CALL + source[at:]).replace('#include "a64.h"\n', '#include "a64.h"\nint hos_zstd_stream(Ctx *c);\n', 1)
+
+
+ZSTD_FRAMES_HEAD = "void f_8010b380(Ctx *__restrict A64_NOESC c) {\n"
+ZSTD_FRAMES_CALL = ("    if (hos_zstd_frames(c)) return;   /* (nx2/oot_patches.py: HOS_NATIVE_ZSTD_FRAMES, the host's libzstd) */\n")
+
+
+def patch_zstd_frames(source):
+    """f_8010b380, zstd's decompressMultiFrame in the game (x0 the context, x1 and x2 the output and its room, x3 and x4 the
+    frames, x5 and x6 a raw dictionary, x7 the DDict or 0; the resource loaders' whole-buffer decode), returns at once when
+    hos_zstd_frames did the call: with HOS_NATIVE_ZSTD_FRAMES on, the host's libzstd decodes the frames (host/hos_zstd.c);
+    off, the function runs as lifted"""
+    start = source.find(ZSTD_FRAMES_HEAD)
+    if start < 0:
+        return None
+    if ZSTD_FRAMES_CALL in source:   # (made before: a lift patched again)
+        return source
+    at = start + len(ZSTD_FRAMES_HEAD)
+    return (source[:at] + ZSTD_FRAMES_CALL + source[at:]).replace('#include "a64.h"\n',
+                                                                  '#include "a64.h"\nextern int hos_zstd_frames(Ctx *c);\n', 1)
 
 
 TEXT_HEAD = "void f_80b1e140(Ctx *__restrict A64_NOESC c) {"
@@ -746,7 +782,7 @@ def patch_heap_retry(s):
 # (the wait action's start and tick, code_033.c; the anchors carry call-return PC literals, so each is once in its function)
 OC_DECL = ("extern volatile int hos_oc_wait;\nextern volatile int hos_oc_last_kind;\n"
            "extern volatile unsigned hos_oc_beat;\n"
-           "#define HOS_OC_BUTTONS(k) ((k) == 1 || (k) == 2 || (k) == 3 || (k) == 10 || (k) == 11)\n")
+           "#define HOS_OC_BUTTONS(k) ((k) == 1 || (k) == 2 || (k) == 3 || (k) == 7 || (k) == 10 || (k) == 11)\n")
 OC_ENTRY_HEAD = "void f_828a9190(Ctx *__restrict A64_NOESC c) {"
 OC_ENTRY_OLD = ("    c->x[1]=recomp_load32(c,c->x[19] + 32);\n"
                 "    { uint64_t _r = ((uint64_t)0 | ((c->x[0]) << 0)); c->x[20] = _r; }\n"
@@ -754,7 +790,8 @@ OC_ENTRY_OLD = ("    c->x[1]=recomp_load32(c,c->x[19] + 32);\n"
 OC_ENTRY_NEW = ("    c->x[1]=recomp_load32(c,c->x[19] + 32);\n"
                 "    hos_oc_last_kind = (int)c->x[1], hos_oc_wait = HOS_OC_BUTTONS(c->x[1]) ? 1 : 2, hos_oc_beat++;"
                 "   /* (nx2/oot_patches.py: the note wait began; 1 and 3 are the field ocarina, 2 a song lesson, "
-                "10 the scarecrow's recording, 11 the scarecrow's recall of it, 13 a dialogue's, which stays the game's) */\n"
+                "7 the Lost Woods skull kids' songs, 10 the scarecrow's recording, 11 the scarecrow's recall of it, "
+                "13 a dialogue's, which stays the game's) */\n"
                 "    { uint64_t _r = ((uint64_t)0 | ((c->x[0]) << 0)); c->x[20] = _r; }\n"
                 "c->x[30] = 0x828a91e4ULL; f_832b35d0(c);")
 OC_TICK_HEAD = "void f_828a9280(Ctx *__restrict A64_NOESC c) {"
@@ -863,6 +900,22 @@ def patch_file(s, name, protect_hearts=False):
             lines.append("oot_patches: the zstd stream decode's host hook in " + name)
         out = zs
         counts["zstd stream hook"] += 1
+    zf = patch_zstd_frames(out) if protect_hearts else None
+    if zf is not None:
+        if zf != out:
+            lines.append("oot_patches: the zstd whole-buffer decode's host hook in " + name)
+        out = zf
+        counts["zstd frames hook"] += 1
+    seq = patch_zstd_seq(out) if protect_hearts else None
+    if seq is not None:
+        out = seq
+        counts["zstd sequence loop"] += 1
+        lines.append("oot_patches: the native zstd sequence loop in " + name)
+    names = patch_names(out) if protect_hearts else None   # (host/names_native.c: f_805aeea0's name searches natively)
+    if names is not None:
+        out = names
+        counts["name searches"] += 1
+        lines.append("oot_patches: the native name searches in " + name)
     layout = patch_text_layout(out) if protect_hearts else None
     if layout is not None:
         out = layout
@@ -968,6 +1021,43 @@ def patch_file(s, name, protect_hearts=False):
     return out, counts, lines
 
 
+# (hookshot, 15/11) The two name searches of f_805aeea0 (the lookup in the game's sorted containers) natively: host/names_native.c
+# says what was measured. At each loop's head the host runs the iterations it can and the loop goes on or out; at each exit,
+# the check of HOS_NAMES_NATIVE=2. Inside the function only (split_hot cuts the file at function heads, and a label of the
+# same address could be another function's)
+NAMES_HEAD = "void f_805aeea0(Ctx *__restrict A64_NOESC c) {\n"
+NAMES_EDITS = [
+    ("L_805afbd4:;\n", "    { extern int hos_names_lower(Ctx *); if (hos_names_lower(c)) goto L_805afe30; }   /* (nx2/oot_patches.py: "
+                       "host/names_native.c) */\n"),
+    ("L_805afe30:;\n", "    { extern volatile int hos_names_checking; extern void hos_names_exit(Ctx *, int); "
+                       "if (hos_names_checking) hos_names_exit(c, 0); }\n"),
+    ("L_805b1d8c:;\n", "    { extern int hos_names_upper(Ctx *, int); if (hos_names_upper(c, 1)) goto L_805b0200; }\n"),
+    ("L_805b1d98:;\n", "    { extern int hos_names_upper(Ctx *, int); if (hos_names_upper(c, 0)) goto L_805b0200; }\n"),
+    ("L_805b0200:;\n", "    { extern volatile int hos_names_checking; extern void hos_names_exit(Ctx *, int); "
+                       "if (hos_names_checking) hos_names_exit(c, 1); }\n"),
+]
+
+
+def patch_names(s):
+    """The native name searches' calls in f_805aeea0 (the supported build's: these addresses are that build's). None when the
+    function is not in this file or is patched already; a SystemExit when one of its places is not there once"""
+    at = s.find(NAMES_HEAD)
+    if at < 0:
+        return None
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # (python -I leaves the script folder off)
+    import lifted_c
+    m = lifted_c.HEAD.search(s, at + len(NAMES_HEAD))
+    end = m.start() if m else len(s)
+    body = s[at:end]
+    if NAMES_EDITS[0][1] in body:
+        return None
+    for anchor, call in NAMES_EDITS:
+        if body.count(anchor) != 1:
+            raise SystemExit("oot_patches: f_805aeea0's %r found %d times" % (anchor.strip(), body.count(anchor)))
+        body = body.replace(anchor, anchor + call, 1)
+    return s[:at] + body + s[end:]
+
+
 def report(paths, counts, protect_hearts=False):
     """The warnings from the files' counts (each file's patch_file counts, in the order of paths), and the step divides' rule:
     both or neither, so a file of paths that has the hook is put back"""
@@ -987,6 +1077,8 @@ def report(paths, counts, protect_hearts=False):
         done["disable camera centering"] = 0
         done["scene format"] = 0
         done["zstd stream hook"] = 0
+        done["zstd frames hook"] = 0
+        done["name searches"] = 0
     total = collections.Counter()
     for c in counts:
         total.update(c)

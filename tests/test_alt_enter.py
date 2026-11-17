@@ -26,6 +26,7 @@ def case(text, label):
 
 def check_windows():
     src = (ROOT / "host" / "display.c").read_text(encoding="utf-8")
+    src = src[src.index("static LRESULT CALLBACK wndproc("):]   # (the window procedure's cases: key_messages has its own above)
     sys_down = case(src, "WM_SYSKEYDOWN")
     for need, why in (("VK_RETURN", "Enter"), ("1 << 29", "the Alt bit"), ("1 << 30", "a held key repeating"),
                       ("set_fullscreen(w, !fullscreen)", "the toggle"), ("break;", "other Alt keys to DefWindowProc")):
@@ -75,7 +76,7 @@ def main():
     check_linux()
     hid = (ROOT / "host" / "nn_hid.c").read_text(encoding="utf-8")
     fn = block(hid, "static int kmap_down(")
-    if "kmap_down(key_bind[i][k], key)" not in hid:
+    if "kmap_down(key_bind[i][k], kpos)" not in hid:   # (kpos: a bound key by its place on the keyboard)
         raise SystemExit("nn_hid.c: the bound keys no longer go through kmap_down")
     with tempfile.TemporaryDirectory(prefix="alt-enter-") as tmp:
         c = Path(tmp) / "fixture.c"

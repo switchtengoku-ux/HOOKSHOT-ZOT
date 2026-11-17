@@ -20,6 +20,9 @@ Changes made here after the copy (against Hookshot's first import of it, commit 
   history is Hookshot's: `git log 04407384.. -- third_party/a64-kit`.
 - Hookshot: `tools/toolchain.py` reads `HOOKSHOT_MINGW`, as the rest of Hookshot's build sets it, where Hookshot read
   `HOOKSHOT_MINGW` (marked `(hookshot)`). The `(hookshot)` markers and comments stay as Hookshot wrote them.
+- Hookshot, 2026-11-14, from ProjectReLink (a GPL fork of Hookshot): `lift/a64_lift.py`'s vector float sums (A64_VFPX_SUM)
+  fix only the lanes the fast test gave up on, and the operations the fast paths and rescues give up on are done
+  with the host's own arithmetic where Arm's result is known (FPX_EASY_HEADER), not the software body.
 
 So the copy can no longer be refreshed by copying the files again: a refresh keeps these changes, and the tree-sha256
 below is this folder's, not upstream's (python -I scripts/check_third_party.py).
@@ -27,4 +30,4 @@ below is this folder's, not upstream's (python -I scripts/check_third_party.py).
 Licensing: `lift/suyu/arm64_to_c.h` is suyu's (GPL-2.0-or-later, texts in `lift/suyu/`), so `a64emit.dll`, the
 generated runtime and all lifted C are GPL. See `NOTICE.TOTKPort.md`.
 
-tree-sha256: d116e883d51a5a03c3005afb268136314f2351ccc5786904f5915561b699bc81
+tree-sha256: 2c6d34e53e14c64a0c371987a48d70e8eb8feb075d73ab8494552187d4cb60d1

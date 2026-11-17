@@ -14,11 +14,12 @@ void hos_input_clear_toggles(void);
 #include "../hos_sdl.h"
 
 /* (the window's app id: the applications menu's entry names it as its StartupWMClass, builder/linux/hookshot_builder.py) */
-#define HOS_APP_ID "io.github.NotRexed.Hookshot"
+#define HOS_APP_ID "io.github.pixl27.ProjectHookshot"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <windows.h>
+#include "../hos_paths.h"   /* (the game folder: its title and icon) */
 #include "../../gpu/vk/vk_api.h"
 #include "../display_pointer.h"
 #include <math.h>
@@ -47,6 +48,8 @@ int hos_mouse_take(int32_t *dx, int32_t *dy) {
     *dy = InterlockedExchange(&mouse_dy, 0);
     return mouse_captured;
 }
+int hos_mouse_test_on(void) { return 0; }   /* (hookshot: a test's own mouse, HOS_MOUSE_TEST, is display.c's on Windows) */
+int hos_key_down(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }   /* (hookshot: this window's own table of keys, win32_posix.c) */
 
 /* (mouse_native.c) motion taken and not used, put back for the next taker (the player camera's) */
 void hos_mouse_give_back(int32_t dx, int32_t dy) {
@@ -306,7 +309,7 @@ void hos_display_loop(void) {
         int w = 0, h = 0;
         if (sscanf(getenv("HOS_WINDOW_SIZE"), "%dx%d", &w, &h) == 2 && w >= 64 && h >= 64) win_w = w, win_h = h;
     }
-    window = hos_sdl_window(window_title(HOS_GAME_TITLE), win_w, win_h);
+    window = hos_sdl_window(window_title(hos_game_title(HOS_GAME_TITLE)), win_w, win_h);   /* (the game's own name: host/hos_paths.h) */
     if (!window) {
         hos_log("display: SDL_CreateWindow: %s: no window", hos_sdl_error());
         fprintf(stderr, "display: SDL_CreateWindow: %s: no window\n", hos_sdl_error());
@@ -317,10 +320,11 @@ void hos_display_loop(void) {
     }
     vk_window.window = window;
     hos_posix_window[0] = 1;
-    {   /* the window's icon: hookshot.png beside the game (make_game.py puts it there), for X11 and the compositors that
-           take one from the window; the others find it through the menu entry */
+    {   /* the window's icon: hookshot.png in the game folder (make_game.py puts it there: the game's own icon, else Hookshot's),
+           for X11 and the compositors that take one from the window; the others find it through the menu entry. (The folder, not
+           the exe's: the game is bin/hookshot in a packaged builder's folder, and the icon was looked for in bin/) */
         char png[MAX_PATH];
-        DWORD n = GetModuleFileNameA(NULL, png, MAX_PATH);
+        DWORD n = hos_game_path_a(png, MAX_PATH);
         while (n && png[n - 1] != '/') n--;
         snprintf(png + n, sizeof png - n, "hookshot.png");
         hos_sdl_icon(window, png);

@@ -168,6 +168,7 @@ struct PcacheFetch {
 thread_local bool pcache_save_between = false;
 std::atomic<bool> pcache_save_owed{false};
 bool serial_builds_on() { return false; }
+[[maybe_unused]] static void helper_thread_start() {}   // (vk_texture.cpp: registers a thread made inside a ReplayPin on Linux)
 #include "pipeline_cache_save.inc"
 #ifdef CACHE_VECTOR_BASELINE
 #undef fwrite

@@ -9,11 +9,13 @@
    Environment: HOS_TRACE=1 (log HLE calls), HOS_MEMORY_MB (memory the game is told it has),
                 HOS_NVN_CONTINUE=1 (go on past nvnBootstrapLoader). */
 #include "hos.h"
+#include "save_backup.h"
 #ifndef HOOKSHOT_ENV_H   /* (env_on: the switches' one rule) */
 #include "../gpu/vk/compat/hookshot_env.h"
 #endif
 #include "hos_paths.h"
 #include "game_layout.h"
+#include "options_path.h"
 #include "hos_wide_size.h"   /* (the widescreen picture's size, shared with the Insert menu) */
 #include "../gpu/vk/vk_api.h"
 #include "../gpu/vk/oot_cheat_items.h"
@@ -72,6 +74,22 @@ static void no_power_throttling(void) {
         s.control = 0x1;
         set(GetCurrentProcess(), 4, &s, sizeof s);
     }
+}
+#endif
+
+/* (hookshot) HOS_PROCESS_PRIORITY=0 normal, 1 above normal (default), 2 high: the process's own priority class while it runs (Windows puts
+   it back when it exits). The game's threads run at the normal level, as the foreground window's threads do, and Windows raises
+   those for a while on their window's events: on the terrace the 40-90 ms stalls came with another app's interface busy
+   (its renderer 53 % of a core in the seconds with a stall against 6 % otherwise, hs205), the game's threads waiting, its
+   render thread pinned to one core */
+#ifdef _WIN32
+static void process_priority(void) {
+    const char *e = getenv("HOS_PROCESS_PRIORITY");
+    const int level = e ? atoi(e) : 1;   /* (above normal by default since hs206-hs209, the same route alternated: frames >= 40 ms
+                                             6 and 7 against 17 and 10, gaps >= 28 ms 23 and 21 against 34 and 27, the terrace's
+                                             repeats 0.51 and 0.36 a second against 0.65 and 0.55) */
+    const DWORD cls = level >= 2 ? HIGH_PRIORITY_CLASS : level == 1 ? ABOVE_NORMAL_PRIORITY_CLASS : NORMAL_PRIORITY_CLASS;
+    if (level > 0 && SetPriorityClass(GetCurrentProcess(), cls)) hos_log("process priority class: %s", level >= 2 ? "high" : "above normal");
 }
 #endif
 
@@ -228,7 +246,7 @@ int hos_posix_guest_discard(void *p, size_t n) {
 }
 #endif
 
-/* The guest window, for the renderer (gpu/render/rx_buffer.cpp). */
+/* The guest window, for the renderer (MkwVkHost.guest_base and guest_size, host/rx_backend.c). */
 uint8_t *hos_guest_base(void) { return A64_MEM; }
 uint64_t hos_guest_size(void) { return GUEST_SPACE; }
 
@@ -376,23 +394,46 @@ static const char *saves_dir(const char *beside) {
     char real[MAX_PATH];
     move_old = realpath(beside, real), move_from = beside, move_new = dir;
     /* (looked at first, then moved: with an entry the new place has already, the old place is kept, and it keeps them all.
-       The others used to go all the same, and the game then ran here without them) */
+       The others used to go all the same, and the game then ran here without them. So does one that cannot go, a copy that
+       fails (a full disk): the entries that went before it come back, and a copied one's old place goes only once all are
+       there. They used to stay in the new place, and the next start found them there and kept the old place without them) */
+    struct { char *name; int copied; } *went = NULL;
+    size_t n_went = 0;
     for (int move = 0; move < 2 && !kept; move++) {
         WIN32_FIND_DATAA fd;
         HANDLE h = FindFirstFileA(pattern, &fd);
         if (h == INVALID_HANDLE_VALUE) return dir;
         do {
-            if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, "..")) continue;
+            if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, "..") || (move && kept)) continue;
             char from[MAX_PATH], to[MAX_PATH];
             snprintf(from, sizeof from, "%s" SEP_S "%s", beside, fd.cFileName);
             snprintf(to, sizeof to, "%s" SEP_S "%s", dir, fd.cFileName);
-            if (!move) kept += GetFileAttributesA(to) != INVALID_FILE_ATTRIBUTES;
-            else if (!has_link(from) && MoveFileExA(from, to, 0)) moved++;
-            else if (copy_tree(from, to)) delete_tree(from), moved++;
-            else delete_tree(to), kept++;
+            if (!move) {
+                kept += GetFileAttributesA(to) != INVALID_FILE_ATTRIBUTES;
+                continue;
+            }
+            void *more = realloc(went, (n_went + 1) * sizeof *went);
+            char *name = more ? strdup(fd.cFileName) : NULL;
+            if (more) went = more;
+            if (!name) kept++;
+            else if (!has_link(from) && MoveFileExA(from, to, 0)) went[n_went].name = name, went[n_went++].copied = 0;
+            else if (copy_tree(from, to)) went[n_went].name = name, went[n_went++].copied = 1;
+            else delete_tree(to), free(name), kept++;
         } while (FindNextFileA(h, &fd));
         FindClose(h);
     }
+    for (size_t i = 0; i < n_went; i++) {
+        char from[MAX_PATH], to[MAX_PATH];
+        snprintf(from, sizeof from, "%s" SEP_S "%s", beside, went[i].name);
+        snprintf(to, sizeof to, "%s" SEP_S "%s", dir, went[i].name);
+        if (!kept) {
+            moved++;
+            if (went[i].copied) delete_tree(from);
+        } else if (went[i].copied) delete_tree(to);
+        else if (!MoveFileExA(to, from, 0)) hos_log("saves: %s could not come back to %s", to, from);
+        free(went[i].name);
+    }
+    free(went);
     if (kept) {
         hos_log("saves: %d of %s's entries could not go to %s: the saves stay in %s", kept, beside, dir, beside);
         return beside;
@@ -419,14 +460,17 @@ static const char *saves_dir(const char *beside) {
    HOS_ENV_FILE=<path> reads that file instead: a scripted or A/B test run brings its own switches and leaves the
    player's hookshot_env.txt as it is.
    (hookshot) hookshot_env.txt is a file players pass around, so it sets only the game's own switches (RX_, HOS_,
-   HOOKSHOT_, EDEN_, NVN_ and SDL_ names), never HOS_ENV_FILE or SDL's library override, and no value that is a
-   path but RX_VK_DLSS_DIR's: the system's variables (the Vulkan loader's layers, PATH and the like) can load code, and
-   the dump switches write files where they name. The file HOS_ENV_FILE names sets anything. */
+   HOOKSHOT_, EDEN_, NVN_ and SDL_ names), never HOS_ENV_FILE, HOS_CONTROL_PEER_SID or SDL's library override, and no
+   value that is a path but RX_VK_DLSS_DIR's: the system's variables (the Vulkan loader's layers, PATH and the like) can
+   load code, and the dump switches write files where they name. The file HOS_ENV_FILE names sets anything. */
 static int env_line_allowed(const char *name, const char *value) {
     static const char *const prefixes[] = {"RX_", "HOS_", "HOOKSHOT_", "EDEN_", "NVN_", "SDL_"};
     int ok = 0;
     for (size_t i = 0; i < sizeof prefixes / sizeof *prefixes; i++) ok |= !strncmp(name, prefixes[i], strlen(prefixes[i]));
     if (!ok || !strcmp(name, "HOS_ENV_FILE") || !strcmp(name, "SDL_DYNAMIC_API")) return 0;
+    /* (hookshot) nor HOS_CONTROL_PEER_SID: it lets one more account into the control bridge's pipe (host/control.c), so a
+       shared file would let another user of this PC steer the game and read its memory. The environment still sets it */
+    if (!strcmp(name, "HOS_CONTROL_PEER_SID")) return 0;
     /* (hookshot) nor the libraries SDL loads by name (SDL_VULKAN_LIBRARY, SDL_OPENGL_LIBRARY, SDL_VIDEO_GL_DRIVER,
        SDL_VIDEO_EGL_DRIVER...): a bare file name is looked for beside the game and in the current folder on Windows */
     if (!strncmp(name, "SDL_", 4) && (strstr(name, "_LIB") || strstr(name, "GL_DRIVER"))) return 0;
@@ -454,18 +498,28 @@ static int env_line_allowed(const char *name, const char *value) {
     const int drive = ((value[0] | 0x20) >= 'a' && (value[0] | 0x20) <= 'z' && value[1] == ':');
     return !strpbrk(value, "/\\") && !drive && value[0] != '~' && strcmp(value, ".") && strcmp(value, "..");
 }
+/* (hookshot) what the file gave, for the log's second line: a player could not tell whether the file was read
+   ("idk if it's doing something or not"). Kept here: the log is opened after the file is read */
+static char hookshot_env_note[1024];
 static void load_hookshot_env(void) {
     char path[MAX_PATH + 32];
     const char *other = getenv("HOS_ENV_FILE");
+    FILE *f = NULL;
     if (other && *other) {
         snprintf(path, sizeof path, "%s", other);
+        f = fopen(path, "r");
     } else {
         DWORD n = hos_game_path_a(path, MAX_PATH);
         while (n && path[n - 1] != 92 && path[n - 1] != 47) n--;
-        memcpy(path + n, "hookshot_env.txt", 17);
+        memcpy(path + n, "hookshot_env.txt", sizeof "hookshot_env.txt");
+        f = fopen(path, "r");
+        /* (Notepad with the extensions hidden saves "hookshot_env.txt" as hookshot_env.txt.txt: taken too) */
+        if (!f) memcpy(path + n, "hookshot_env.txt.txt", sizeof "hookshot_env.txt.txt"), f = fopen(path, "r");
     }
-    FILE *f = fopen(path, "r");
-    if (!f) return;
+    if (!f) {
+        snprintf(hookshot_env_note, sizeof hookshot_env_note, "env: no hookshot_env.txt beside the game (none read)");
+        return;
+    }
     /* The environment the game was started with wins over the file: a switch set for one launch (HOS_FULLSCREEN=0 in a
        shell, a script's RX_VK_PACE=1) beats the same name saved in the file. The file's own later lines still replace its
        earlier ones: the names it set are kept here (for the whole run: a second read sets them again), so they are not taken
@@ -473,6 +527,9 @@ static void load_hookshot_env(void) {
     static char from_file[256][128];   /* (names of up to 127 characters; a file with more names than this has its later
                                           lines for the names past it taken as the environment's, logged as left out) */
     static int from_file_n;
+    const char *base = path + strlen(path);
+    while (base > path && base[-1] != 92 && base[-1] != 47) base--;
+    int used = snprintf(hookshot_env_note, sizeof hookshot_env_note, "env: %s read:", base), count = 0;
     char line[512];
     while (fgets(line, sizeof line, f)) {
         char *s = line;
@@ -496,6 +553,9 @@ static void load_hookshot_env(void) {
         }
         if (!ours && from_file_n < (int)(sizeof from_file / sizeof *from_file) && strlen(s) < sizeof from_file[0])
             strcpy(from_file[from_file_n++], s);
+        if (used > 0 && used < (int)sizeof hookshot_env_note - 1)
+            used += snprintf(hookshot_env_note + used, sizeof hookshot_env_note - (size_t)used, " %s", s);
+        count++;
 #ifdef _WIN32
         *eq = '=';
         _putenv(s);
@@ -504,6 +564,7 @@ static void load_hookshot_env(void) {
 #endif
     }
     fclose(f);
+    if (!count) snprintf(hookshot_env_note + used, sizeof hookshot_env_note - (size_t)used, " no NAME=VALUE line");
 }
 
 /* Switches this build no longer reads, still set (in the environment or hookshot_env.txt, as older issues told players):
@@ -672,17 +733,40 @@ static void oot_inventory_refresh(Ctx *c, int64_t now) {
         }
     }
     if (!probed && oot_pouch_count(c, "Item_DekuSeed") >= 0) {
-        probed = 1;   /* (one line naming every count, both spellings: which names the pouch knows) */
+        probed = 1;   /* (each editor value, plus the alternative pouch spellings) */
         static const char *const probes[] = {OOT_CHEAT_ITEM_PROBES};
         const unsigned total = (unsigned)(OOT_ITEM_COUNT + sizeof probes / sizeof probes[0]);
         char line[512];
         size_t used = 0;
         for (unsigned i = 0; i < total; i++) {   /* (several short lines: the log cuts long ones) */
             const char *name = i < OOT_ITEM_COUNT ? oot_item_names[i] : probes[i - OOT_ITEM_COUNT];
-            used += (size_t)snprintf(line + used, sizeof line - used, " %s=%d", name, oot_pouch_count(c, name));
+            const int count = i < OOT_ITEM_COUNT ? oot_item_count(c, name) : oot_pouch_count(c, name);
+            used += (size_t)snprintf(line + used, sizeof line - used, " %s=%d", name, count);
             if (used > 300 || i + 1 == total) hos_log("cheats: inventory probe:%s", line), used = 0;
         }
     }
+}
+
+/* Learned songs use saved IsGet.<actor> Bool flags rather than pouch quantities.
+   These are their MurmurHash3 x86-32 hashes with seed 0. */
+static uint32_t oot_song_flag(const char *name) {
+    static const struct { const char *name; uint32_t hash; } songs[] = {
+        {"Item_Melody_ZeldaLullaby", 0x01c20002u},
+        {"Item_Melody_EponaSong", 0xb492ac33u},
+        {"Item_Melody_SariaSong", 0xd3f8bfccu},
+        {"Item_Melody_SunSong", 0x165dd1adu},
+        {"Item_Melody_TimeSong", 0x03b3450eu},
+        {"Item_Melody_StormSong", 0x2b39dd4fu},
+        {"Item_Melody_ForestMinuet", 0xdc0a0b54u},
+        {"Item_Melody_FireBolero", 0x49041ab9u},
+        {"Item_Melody_WaterSerenade", 0x3fa63986u},
+        {"Item_Melody_ShadowNocturne", 0xc2fb95f4u},
+        {"Item_Melody_SpiritRequiem", 0x802a36a8u},
+        {"Item_Melody_LightPrelude", 0xd6320ba4u},
+    };
+    for (unsigned i = 0; i < sizeof songs / sizeof songs[0]; i++)
+        if (!strcmp(name, songs[i].name)) return songs[i].hash;
+    return 0;
 }
 
 /* Masks share one slot (the Happy Mask Shop lends one at a time). The game takes "Item_Mask_X" when adding one and
@@ -693,6 +777,11 @@ static int oot_mask_alias(const char *name, char *alias, size_t size) {
 }
 
 static int oot_item_count(Ctx *c, const char *name) {
+    const uint32_t song = oot_song_flag(name);
+    if (song) {
+        int learned = 0;
+        return oot_gamedata_bool(c, song, &learned) ? learned : -1;
+    }
     char alias[64];
     const int n = oot_pouch_count(c, name);
     if (!oot_mask_alias(name, alias, sizeof alias)) return n;
@@ -704,9 +793,19 @@ static void oot_inventory_edit(Ctx *c, int action) {
     const unsigned item = (unsigned)(action - OOT_CHEAT_ITEM_ACTION) / 256, op = (unsigned)(action - OOT_CHEAT_ITEM_ACTION) % 256;
     if (item >= OOT_ITEM_COUNT) return;
     const char *name = oot_item_names[item];
+    const int have = oot_item_count(c, name);
+    const uint32_t song = oot_song_flag(name);
+    if (song) {
+        if (op != 200 || have < 0) return;   /* songs have no editable quantity */
+        if (!oot_gamedata_set_bool(c, song, !have)) {
+            hos_log("cheats: song %s: learned flag unavailable", name);
+            return;
+        }
+        hos_log("cheats: song %s %s (had %d, now %d)", name, have ? "relocked" : "unlocked", have, oot_item_count(c, name));
+        return;
+    }
     char alias[64];
     const int is_mask = oot_mask_alias(name, alias, sizeof alias);
-    const int have = oot_item_count(c, name);
     int delta = 0;
     if (op == 200) delta = have > 0 ? -have : 1;   /* unlock / relock */
     else if (op < 128) delta = (int)op - 64;
@@ -1819,13 +1918,16 @@ static int game_main(int argc, char **argv) {
     }
     load_hookshot_env();
 #endif
+    /* (the settings file, in the user folder: chosen before the crash window's helper, the Discord status and the renderer read
+       it, and after hookshot_env.txt, which may set HOS_OPTIONS_FILE; Linux's main chose it already: host/options_path.c) */
+    hos_options_choose(argc, argv);
     {
         const char *protect_hearts = getenv("HOS_OOT_PROTECT_HEARTS");
         hos_oot_protect_hearts = protect_hearts && !strcmp(protect_hearts, "1");
     }
 #ifdef _WIN32
     {   // (the whole process, not only the window's thread: the renderer asks the window's size from its own, and on a 4K screen at 150%
-        // Windows answered such a thread 2560 x 1440: the picture was that size, in the corner of the window. Hookshot issues 15, 18, 20)
+        // Windows answered such a thread 2560 x 1440: the picture was that size, in the corner of the window)
         typedef BOOL(WINAPI * SetAware)(void *);
         SetAware set = (SetAware)(void *)GetProcAddress(GetModuleHandleA("user32.dll"), "SetProcessDpiAwarenessContext");
         if (set && !env_on("HOS_DPI_UNAWARE")) set((void *)(intptr_t)-4);
@@ -1868,7 +1970,13 @@ static int game_main(int argc, char **argv) {
 #if !defined(_WIN32) && !defined(A64_MEM_ZERO)
             startup_stderr = fcntl(STDERR_FILENO, F_DUPFD_CLOEXEC, 0);
 #endif
-            if (freopen(path, "w", stderr)) setvbuf(stderr, NULL, _IONBF, 0);
+            /* (opened first: freopen closes stderr when it cannot open the file, and the next file opened would take its
+               descriptor. A log that cannot be written leaves the stderr the game was started with) */
+            FILE *log = fopen(path, "w");
+            if (log) {
+                fclose(log);
+                if (freopen(path, "w", stderr)) setvbuf(stderr, NULL, _IONBF, 0);
+            }
         } else hos_crash_record_prepare(NULL);   /* an externally supplied stderr, not the game's log */
     }
     hos_log("hookshot %s", HOOKSHOT_VERSION);   /* (the log's first line: which build a report comes from) */
@@ -1884,6 +1992,7 @@ static int game_main(int argc, char **argv) {
        the guest, the renderer, the sound and the input; none for --prepare-shaders, HOS_HEADLESS or HOS_CRASH_WATCH=0 */
     void hos_crash_watch_start(int argc, char **argv);
     hos_crash_watch_start(argc, argv);
+    if (hookshot_env_note[0]) hos_log("%s", hookshot_env_note);   /* (what hookshot_env.txt gave) */
     const char *image = NULL;
     /* (hookshot) --compile-shaders all or most: what a preparation of this run builds (gpu/vk/vk_draw.cpp compile_all), over
        compile_shaders= in hookshot_options.ini; as RX_VK_COMPILE_SHADERS, set before --prepare-shaders runs, wherever it stands */
@@ -1959,6 +2068,11 @@ static int game_main(int argc, char **argv) {
     }
     if (!hos_user_dir) hos_user_dir = "user";
     CreateDirectoryA(hos_user_dir, NULL);
+    hos_options_carry();   /* (a game folder's settings from before into the user folder, once: host/options_path.c) */
+    /* (host/save_backup.c: an empty save folder takes the newest backup from outside the game folder, before the game reads
+       its saves; then this start's saves are backed up when something is newer than the last backup) */
+    hos_save_restore_if_empty(hos_user_dir);
+    hos_save_backup(hos_user_dir, "at start");
     if (!reserve_guest()) {
         fprintf(stderr, "cannot reserve the guest window\n");
         return 1;
@@ -2006,20 +2120,14 @@ static int game_main(int argc, char **argv) {
         float want = e ? (float)atof(e) : 0.0f;
         if (!e) {
             int saved = -1, version = 0;   /* (the Aspect ratio's ultrawide= and options_version=, -1 / 0 without them) */
-            char path[MAX_PATH];
-            const DWORD len = hos_game_path_a(path, MAX_PATH);
-            char *slash = len ? strrchr(path, SEP) : NULL;
-            if (slash) {
-                snprintf(slash + 1, (size_t)(path + MAX_PATH - slash - 1), "hookshot_options.ini");
-                FILE *o = fopen(path, "r");
-                if (o) {
-                    char line[80];
-                    while (fgets(line, sizeof line, o)) {
-                        if (!strncmp(line, "ultrawide=", 10)) saved = atoi(line + 10) != 0;
-                        if (!strncmp(line, "options_version=", 16)) version = atoi(line + 16);
-                    }
-                    fclose(o);
+            FILE *o = fopen(hos_options_file(), "r");
+            if (o) {
+                char line[80];
+                while (fgets(line, sizeof line, o)) {
+                    if (!strncmp(line, "ultrawide=", 10)) saved = atoi(line + 10) != 0;
+                    if (!strncmp(line, "options_version=", 16)) version = atoi(line + 16);
                 }
+                fclose(o);
             }
             const int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
             /* (no line: the monitor's shape; an older file's 16:9 on a screen narrower than 16:9 too: hos_aspect_on) */
@@ -2074,6 +2182,7 @@ static int game_main(int argc, char **argv) {
 #ifdef _WIN32
     timeBeginPeriod(1);   /* 1 ms timer resolution: the 60 Hz vsync and the game's frame pacing sleep in short steps */
     no_power_throttling();
+    process_priority();
 #endif
     void hos_display_start(void);
     hos_display_start();  /* the game's window; HOS_HEADLESS=1 for none */
@@ -2166,6 +2275,7 @@ int main(int argc, char **argv) {
     void hos_display_loop(void);
     hos_game_layout();   /* (the game folder's cache/ and logs/, before anything writes there, --prepare-shaders too: host/game_layout.c) */
     load_hookshot_env();
+    hos_options_choose(argc, argv);   /* (before the Discord status reads it, below: host/options_path.c) */
     driver_cache_room();
     driver_cache_folder();
     game_argc = argc, game_argv = argv;

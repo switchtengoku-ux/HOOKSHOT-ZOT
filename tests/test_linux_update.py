@@ -619,7 +619,8 @@ class UpdateTests(unittest.TestCase):
                                                    "a": SimpleNamespace(fsr=False, no_fsr=False, update=None, fetch_fsr_runtime=False)})
             self.assertEqual((out / "hookshot").read_bytes(), (ROOT / "builder" / "linux" / "hookshot-folder").read_bytes())
             self.assertTrue((out / "hookshot").stat().st_mode & stat.S_IXUSR)
-            self.assertEqual(sorted(p.name for p in out.iterdir()), ["bin", "hookshot", "image.bin"])
+            self.assertEqual(sorted(p.name for p in out.iterdir() if p.name != make_game.INSTALLED_NOTE),   # (what the finish put in)
+                             ["bin", "hookshot", "image.bin"])
             self.assertEqual(sorted(p.name for p in (out / "bin").iterdir()), sorted(make_game.BESIDE))
             self.assertEqual((out / "bin" / "hookshot").read_bytes(), b"new hookshot")
 

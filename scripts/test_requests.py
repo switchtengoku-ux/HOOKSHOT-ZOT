@@ -277,6 +277,37 @@ def github_json(url, number):
         raise team_chat.ChatError("cannot reach GitHub to check PR #%d: %s" % (number, error)) from None
 
 
+# How long an author's permission on Hookshot is kept (forge_permissions.json in the sign-in's folder): it changes
+# rarely, and asking it for every PR on every list was most of this script's calls to git.magicbean.dev
+PERMISSION_TTL = 3600
+_permissions = {}
+
+
+def author_permission(author, token):
+    """The author's permission on Hookshot ("write", "admin", ...), kept PERMISSION_TTL seconds, or None when
+    git.magicbean.dev can't be asked."""
+    path = os.path.join(magicbean_login.config_dir(), "forge_permissions.json")
+    if not _permissions:
+        try:
+            with open(path, encoding="utf-8") as f:
+                _permissions.update(json.load(f))
+        except (OSError, ValueError):
+            pass
+    kept = _permissions.get(author)
+    if kept and time.time() - kept[1] < PERMISSION_TTL:
+        return kept[0]
+    try:
+        perm = forge_get("/collaborators/%s/permission" % urllib.parse.quote(author), token).get("permission")
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+    _permissions[author] = [perm, time.time()]
+    try:
+        magicbean_login.write_private(path, _permissions)
+    except OSError:   # (a folder that can't be written, a sandbox: kept for this run only)
+        pass
+    return perm
+
+
 def pr_info(number):
     """The PR's state, labels, author's standing and head commit, in one GitHub call."""
     pr = github_json(PR_API % number, number)

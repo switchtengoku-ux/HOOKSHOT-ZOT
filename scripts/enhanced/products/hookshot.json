@@ -28,6 +28,8 @@
     "fullscreen",
     "vsync",
     "upscaling",
+    "crt_filter",
+    "crt_lines",
     "ultrawide_menus",
     "hdr",
     "hdr_paper_white",
@@ -37,7 +39,6 @@
     "texture_detail",
     "anisotropic_filtering",
     "gpu_device",
-    "threaded_rendering",
-    "vram_budget"
+    "threaded_rendering"
   ]
 }

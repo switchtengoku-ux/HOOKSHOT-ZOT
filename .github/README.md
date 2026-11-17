@@ -9,7 +9,7 @@ tools and options on top of upstream, while staying close to it so its releases 
 > supports. Never share game files, saves or anything built from them. Upstream's rules apply:
 > [CONTRIBUTING.md](../CONTRIBUTING.md).
 
-- **Based on:** upstream tag `v2.3.1`. Upstream's own documentation is the [main readme](../readme.md).
+- **Based on:** upstream tag `v2.3.2`. Upstream's own documentation is the [main readme](../readme.md).
 - **Status:** early development. Nothing here is released yet; build from source.
 - **Not affiliated** with upstream. Report fork-specific problems here, not on upstream's tracker.
 

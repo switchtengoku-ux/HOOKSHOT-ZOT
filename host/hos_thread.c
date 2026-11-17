@@ -44,7 +44,11 @@ struct HosThread {
        hos_vcore_back) */
     int vc_held, vc_last, vc_queued, vc_escaped;
     volatile int vc_kick;
+    int vc_prio_over;   /* (hookshot, HOS_VC_PRIO) the priority the virtual cores schedule it at, 0: its own */
     int64_t vc_since;
+    /* (hookshot, vc_bg_cap) a background thread: until when it waits for the cores held to be few enough, and until
+       when it is then left alone */
+    int64_t vc_cap_until, vc_free_until;
     CONDITION_VARIABLE vc_cv;
     /* (hookshot) fibers: the context running now (NULL: ctx, the thread's own), the thread's host fiber once it
        switched to a guest fiber */
@@ -658,9 +662,11 @@ int64_t hos_spin_ns(void) {
     return hos_thread_serial(hos_self()) ? b >> 32 : b & 0xFFFFFFFF;
 }
 
+static void vc_name_prio(HosThread *t);   /* (below) */
 void hos_thread_set_name(HosThread *t, const char *name) {
     snprintf(t->name, sizeof t->name, "%s", name);
     __atomic_store_n(&t->serial, serial_name(t->name), __ATOMIC_RELAXED);   /* (atomic: SetThreadName may name another thread) */
+    vc_name_prio(t);
     if (t->handle) {
         wchar_t w[48];
         MultiByteToWideChar(CP_UTF8, 0, t->name, -1, w, 48);
@@ -692,6 +698,18 @@ static const NameSpec *match_name_spec(const NameSpec *s, int n, const char *nam
     for (int i = 0; i < n; i++)
         if (strcmp(s[i].pat, "*") ? strstr(name, s[i].pat) != NULL : 1) return &s[i];
     return NULL;
+}
+/* (hookshot) HOS_VC_PRIO=<name part>=<priority>,... (experiment): the priority the virtual cores schedule a thread at
+   (who waits for a core, who is asked to give one up), the game's own priority left as it is. OoT's OptimizeChangeBanc
+   (a background thread the main thread waits for about every 40 frames on the way to Saria) waited for a core 28% of
+   its time, asked to give it up by the frame's threads ~17000 times a second (hs173) */
+static void vc_name_prio(HosThread *t) {
+    static NameSpec specs[16];
+    static int n = -1;
+    if (n < 0) n = parse_name_specs(getenv("HOS_VC_PRIO"), specs, 16, 10);
+    const NameSpec *p = n ? match_name_spec(specs, n, t->name) : NULL;
+    t->vc_prio_over = p ? (int)p->value : 0;
+    if (p) hos_log("vcores: %s scheduled at priority %d (its own %d)", t->name, t->vc_prio_over, t->priority);
 }
 /* The last physical core (its logical processors' mask), kept for the Vulkan back end's replay thread (gpu/vk
    vk_replay.cpp pins it there): the game's threads run on the others. The replay is on the frame's critical path
@@ -1657,12 +1675,64 @@ static unsigned vc_allowed(HosThread *t) {
     return m;
 }
 /* a runs before b */
+static int vcp(const HosThread *t) { return t->vc_prio_over ? t->vc_prio_over : t->priority; }
 static int vc_better(HosThread *a, HosThread *b) {
-    return a->priority != b->priority ? a->priority < b->priority : a->vc_since < b->vc_since;
+    return vcp(a) != vcp(b) ? vcp(a) < vcp(b) : a->vc_since < b->vc_since;
+}
+/* (hookshot, 12/11) Background threads and the host's cores. On the console a thread on an idle core costs the others
+   nothing. Here the six virtual cores run on the host's physical cores, and a 6-core machine has five for the game's
+   threads once one is kept for the replay (hos_reserved_cpus): a background thread that runs while the frame's threads
+   are busy takes its share of a physical core from one of them (the sibling logical processor). Measured at the Lost
+   Woods' heavy spot, Link standing (still.ps1 with HOS_VCORE_WAITS, runs of one build): OptimizeChangeBanc and
+   ParallelDecompThread both kept waiting for a core by chance 56.7 fps, one of them 54.3-55.2, neither 52.3-52.7; which
+   one waits depends on the core the game gives them, different from run to run.
+   So a background thread (priority value over 18: ParallelDecompThread 19 ... OptimizeChangeBanc 27; the frame's threads
+   are 16 and 17) takes a free virtual core only while fewer than `cap` are held, and gives its core up when a frame thread
+   takes one past the cap. cap: the physical cores the game's threads have (HOS_BG_CAP=<n>; 0: no limit, as before); no
+   limit either when that is at least the number of virtual cores (a host with 8 cores or more). It waits at most
+   HOS_BG_WAIT_US (8000) for that, then takes any free core and is left alone for HOS_BG_RUN_US (2000): slowed down while
+   the frame's threads need the cores, never starved, and never run without a core because of this. */
+static int64_t vc_bg_wait_ns = 8000000, vc_bg_run_ns = 2000000;
+static int vc_bg_cap(void) {
+    static int cap = -1;
+    if (cap < 0) {
+        const char *e = getenv("HOS_BG_CAP"), *w = getenv("HOS_BG_WAIT_US"), *r = getenv("HOS_BG_RUN_US");
+        int n = 0;
+        if (!e) {
+            n = 0;   /* (off unless asked for: see the measure in the comment above) */
+        } else if (strcmp(e, "auto")) {
+            n = atoi(e);
+        } else {
+            SYSTEM_LOGICAL_PROCESSOR_INFORMATION info[256];
+            DWORD len = sizeof info;
+            if (GetLogicalProcessorInformation(info, &len))
+                for (DWORD i = 0; i < len / sizeof info[0]; i++) n += info[i].Relationship == RelationProcessorCore;
+            if (hos_reserved_cpus()) n--;
+        }
+        if (w) vc_bg_wait_ns = atoll(w) * 1000;
+        if (r) vc_bg_run_ns = atoll(r) * 1000;
+        cap = n >= 2 && n < vc_cores() ? n : 0;
+        if (cap)
+            hos_log("vcores: a background thread (priority over 18) takes a core only while fewer than %d are held, waiting "
+                    "%lld us at most (HOS_BG_CAP=0: no limit)", cap, (long long)(vc_bg_wait_ns / 1000));
+    }
+    return cap;
+}
+static int vc_held_n(void) {
+    int n = 0;
+    for (int k = 0; k < vc_cores(); k++) n += vc_owner[k] != NULL;
+    return n;
+}
+static int vcp(const HosThread *t);
+/* t may not take a free core now: a background thread, the cap reached, its wait not over; holding vc_lock */
+static int vc_capped(const HosThread *t) {
+    const int cap = vc_bg_cap();
+    return cap && vcp(t) > 18 && vc_held_n() >= cap && hos_now_ns() < t->vc_cap_until;
 }
 /* a free core t may run on (its last one, its ideal one, then the lowest), or -1; holding vc_lock */
 static int vc_free_for(HosThread *t) {
     const unsigned m = vc_allowed(t);
+    if (vc_capped(t)) return -1;
     if (t->vc_last > 0 && (m >> (t->vc_last - 1) & 1) && !vc_owner[t->vc_last - 1]) return t->vc_last - 1;
     const int ideal = hos_thread_core(t);
     if ((m >> ideal & 1) && !vc_owner[ideal]) return ideal;
@@ -1675,6 +1745,26 @@ static void vc_take(HosThread *t, int c) {
     t->vc_held = c + 1;
     t->vc_last = c + 1;
     t->vc_kick = 0;
+    /* (hookshot, vc_bg_cap) a frame thread took a core past the cap: the worst background holder not left alone gives
+       its own up at its next checkpoint (vc_kick 3: vc_yield lets it go even with nobody waiting for that core) */
+    const int cap = vc_bg_cap();
+    if (cap && vcp(t) <= 18 && vc_held_n() > cap) {
+        HosThread *worst = NULL;
+        int64_t now = 0;
+        for (int k = 0; k < vc_cores(); k++) {
+            HosThread *h = vc_owner[k];
+            if (h && vcp(h) > 18 && !h->vc_kick && (!worst || vcp(h) > vcp(worst))) {
+                if (!now) now = hos_now_ns();
+                if (now >= h->vc_free_until) worst = h;
+            }
+        }
+        if (worst) {
+            worst->vc_kick = 3;
+            Ctx *rc = worst->run_ctx;
+            __atomic_store_n(rc ? &rc->poll : &worst->ctx.poll, 1, __ATOMIC_RELAXED);
+            vc_st.kicks++;
+        }
+    }
 }
 static void vc_dequeue(HosThread *t) {
     for (int i = 0; i < vc_nq; i++)
@@ -1690,12 +1780,44 @@ static uint64_t vc_chain_key(HosThread *t) { return 1ULL << 63 | (uint64_t)(uint
 static void vc_grant(int c) {
     HosThread *best = NULL;
     for (int i = 0; i < vc_nq; i++)
-        if ((vc_allowed(vc_queue[i]) >> c & 1) && (!best || vc_better(vc_queue[i], best))) best = vc_queue[i];
+        if ((vc_allowed(vc_queue[i]) >> c & 1) && (!best || vc_better(vc_queue[i], best)) && !vc_capped(vc_queue[i]))
+            best = vc_queue[i];
     if (!best) return;
     vc_dequeue(best);
     vc_take(best, c);
     HOS_CHAIN(HOS_CHAIN_SIGNAL, vc_chain_key(best));
     WakeConditionVariable(&best->vc_cv);
+}
+/* (hookshot, HOS_VCORE_WAITS=1, diagnostic) who waits for a core: by thread name, the waits and their time since the last
+   "vcores:" line, the eight longest printed with it. vc_lock held */
+static struct { char name[48]; int64_t ns; int n; } vc_by[96];
+static int vc_waits_on(void) {
+    static int on = -1;
+    if (on < 0) on = env_on("HOS_VCORE_WAITS");
+    return on;
+}
+static void vc_note_wait(const HosThread *t, int64_t ns) {
+    if (!vc_waits_on()) return;
+    int i = 0;
+    while (i < 96 && vc_by[i].name[0] && strcmp(vc_by[i].name, t->name)) i++;
+    if (i == 96) return;
+    if (!vc_by[i].name[0]) snprintf(vc_by[i].name, sizeof vc_by[i].name, "%s", t->name[0] ? t->name : "?");
+    vc_by[i].ns += ns, vc_by[i].n++;
+}
+static void vc_waits_line(void) {
+    if (!vc_waits_on()) return;
+    char line[900];
+    int len = 0;
+    for (int k = 0; k < 8; k++) {
+        int best = -1;
+        for (int i = 0; i < 96 && vc_by[i].name[0]; i++)
+            if (vc_by[i].ns > 0 && (best < 0 || vc_by[i].ns > vc_by[best].ns)) best = i;
+        if (best < 0) break;
+        len += snprintf(line + len, sizeof line - len, " %s %d waits %.1f ms;", vc_by[best].name, vc_by[best].n, vc_by[best].ns / 1e6);
+        vc_by[best].ns = -1;   /* (printed) */
+    }
+    if (len) hos_log("vcores: waited most:%s", line);
+    for (int i = 0; i < 96; i++) vc_by[i].ns = 0, vc_by[i].n = 0;
 }
 static void vc_stats_locked(int64_t now) {
     if (!vc_st.since) vc_st.since = now;
@@ -1704,6 +1826,7 @@ static void vc_stats_locked(int64_t now) {
             (long long)vc_st.takes, (long long)vc_st.waits, vc_st.waits ? vc_st.wait_ns / 1e3 / vc_st.waits : 0.0,
             vc_st.max_ns / 1e6, (long long)vc_st.kicks, (long long)vc_st.yields, (long long)vc_st.escapes,
             (now - vc_st.since) / 1e9);
+    vc_waits_line();
     memset(&vc_st, 0, sizeof vc_st);
     vc_st.since = now;
 }
@@ -1712,14 +1835,22 @@ static int64_t vc_env_ns(const char *name, int64_t us) {
     return (e ? atoll(e) : us) * 1000;
 }
 static void vc_acquire(HosThread *t) {
-    static int64_t esc_better = -1, esc_eq, slice;
+    static int64_t esc_better = -1, esc_eq, slice, spin_ns;
+    int spun = 0;
     if (esc_better < 0) {
+        spin_ns = vc_env_ns("HOS_VCORE_SPIN_US", 0);
+        /* (2 s: an escape runs a thread with no core while the holder still runs on it, so it
+           is only a deadlock breaker; 250 ms before, reached 20-34 times at every start while the opening movie plays) */
         esc_eq = vc_env_ns("HOS_VCORE_ESCAPE_EQ_US", 2000000);
         esc_better = vc_env_ns("HOS_VCORE_ESCAPE_US", 2000000);
         slice = vc_env_ns("HOS_VCORE_SLICE_US", 2000);
     }
     AcquireSRWLockExclusive(&vc_lock);
     vc_st.takes++;
+    if (vc_bg_cap() && vcp(t) > 18) {   /* (vc_bg_cap: how long it waits for the cores held to be few enough) */
+        const int64_t now = hos_now_ns();
+        t->vc_cap_until = now < t->vc_free_until ? 0 : now + vc_bg_wait_ns;
+    }
     int c = vc_free_for(t);
     if (c >= 0) {
         vc_take(t, c);
@@ -1741,16 +1872,34 @@ static void vc_acquire(HosThread *t) {
         HosThread *worst = NULL;
         for (int k = 0; k < vc_cores(); k++) {
             HosThread *h = vc_owner[k];
-            if ((m >> k & 1) && h && h->priority > t->priority && (!worst || h->priority > worst->priority)) worst = h;
+            if ((m >> k & 1) && h && vcp(h) > vcp(t) && (!worst || vcp(h) > vcp(worst))) worst = h;
         }
         if (!worst && hos_now_ns() - t0 > slice)
             for (int k = 0; k < vc_cores() && !worst; k++)
-                if ((m >> k & 1) && vc_owner[k] && vc_owner[k]->priority == t->priority) worst = vc_owner[k];
+                if ((m >> k & 1) && vc_owner[k] && vcp(vc_owner[k]) == vcp(t)) worst = vc_owner[k];
         if (worst && !worst->vc_kick) {
-            worst->vc_kick = worst->priority > t->priority ? 1 : 2;
+            worst->vc_kick = vcp(worst) > vcp(t) ? 1 : 2;
             Ctx *rc = worst->run_ctx;   /* (a fiber's context while it runs one) */
             __atomic_store_n(rc ? &rc->poll : &worst->ctx.poll, 1, __ATOMIC_RELAXED);
             vc_st.kicks++;
+        }
+        /* (hookshot, HOS_VCORE_SPIN_US, experiment) before its first sleep the waiter spins a little for a release to give it
+           a core: the frame's threads hand cores to each other all the time (4000 waits in 5 s in the Kokiri village, 0.4-0.8 ms
+           each), and a sleep and its wake-up are far longer than the hand-over itself. Once a wait: a thread kept waiting
+           (background work behind the frame's threads) sleeps as before */
+        if (!spun && spin_ns > 0) {
+            spun = 1;
+            ReleaseSRWLockExclusive(&vc_lock);
+            const int64_t until = hos_now_ns() + spin_ns;
+            while (!__atomic_load_n(&t->vc_held, __ATOMIC_RELAXED) && hos_now_ns() < until) __builtin_ia32_pause();
+            AcquireSRWLockExclusive(&vc_lock);
+            if (t->vc_held) break;   /* granted by a release, while spinning */
+            if ((c = vc_free_for(t)) >= 0) {
+                vc_dequeue(t);
+                vc_take(t, c);
+                break;
+            }
+            continue;   /* (the holders asked again, then the sleep) */
         }
         SleepConditionVariableSRW(&t->vc_cv, &vc_lock, 1, 0);
         if (t->vc_held) break;   /* granted by a release */
@@ -1781,8 +1930,10 @@ static void vc_acquire(HosThread *t) {
     }
     const int64_t waited = hos_now_ns() - t0;
     HOS_CHAIN(HOS_CHAIN_WOKE, vc_chain_key(t));
+    if (t->vc_cap_until && t0 + waited >= t->vc_cap_until) t->vc_free_until = t0 + waited + vc_bg_run_ns;   /* (vc_bg_cap) */
     vc_st.wait_ns += waited;
     if (waited > vc_st.max_ns) vc_st.max_ns = waited;
+    vc_note_wait(t, waited);
     vc_stats_locked(hos_now_ns());
     ReleaseSRWLockExclusive(&vc_lock);
 }
@@ -1794,6 +1945,11 @@ static void vc_release(HosThread *t) {
     t->vc_held = 0;
     t->vc_kick = 0;
     vc_grant(c);
+    /* (hookshot, vc_bg_cap) fewer cores held: a background thread kept waiting by the cap may take a free core of its own
+       mask now, not only this one */
+    if (vc_nq && vc_bg_cap())
+        for (int k = 0; k < vc_cores(); k++)
+            if (!vc_owner[k]) vc_grant(k);
     ReleaseSRWLockExclusive(&vc_lock);
 }
 /* gives the core to a waiter allowed on it that is better than t (strict) or as good (a yield) */
@@ -1804,8 +1960,10 @@ static void vc_yield(HosThread *t, int strict) {
     int any = 0;
     for (int i = 0; i < vc_nq && !any; i++) {
         HosThread *w = vc_queue[i];
-        any = (vc_allowed(w) >> c & 1) && (strict ? w->priority < t->priority : w->priority <= t->priority);
+        any = (vc_allowed(w) >> c & 1) && (strict ? vcp(w) < vcp(t) : vcp(w) <= vcp(t));
     }
+    /* (hookshot, vc_bg_cap) asked by vc_take: a background thread while too many cores are held */
+    if (!any && t->vc_kick == 3 && vc_held_n() > vc_bg_cap() && hos_now_ns() >= t->vc_free_until) any = 1;
     t->vc_kick = 0;
     if (any) vc_st.yields++;
     ReleaseSRWLockExclusive(&vc_lock);

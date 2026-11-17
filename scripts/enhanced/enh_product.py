@@ -28,9 +28,9 @@ SNAPSHOT_FORMATS = re.compile(r"[a-z]+-zot-snapshot$")
 GRAPHICS_KEYS = (
     "quality_preset", "ultrawide", "output_res", "handheld_profile", "dlss", "dlss_model", "resolution", "sharpness",
     "frame_generation", "frame_generation_by", "frame_pacing", "frame_rate_cap", "nvidia_reflex", "amd_anti-lag_2",
-    "fullscreen", "vsync", "upscaling", "ultrawide_menus", "hdr", "hdr_paper_white", "hdr_peak_brightness",
-    "hdr_contrast", "hdr_tone_mapper", "texture_detail", "anisotropic_filtering", "gpu_device", "threaded_rendering",
-    "vram_budget",
+    "fullscreen", "vsync", "upscaling", "crt_filter", "crt_lines", "ultrawide_menus", "hdr", "hdr_paper_white",
+    "hdr_peak_brightness", "hdr_contrast", "hdr_tone_mapper", "texture_detail", "anisotropic_filtering", "gpu_device",
+    "threaded_rendering",
 )
 
 SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

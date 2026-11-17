@@ -122,8 +122,10 @@ sealed class Runner
         // (AMD FSR 4, the same: AMD's runtime kept in the builder's own folder only when ticked)
         if (ffxSdk != null) si.Environment["HOOKSHOT_FFX_SDK"] = ffxSdk;
         else si.Environment.Remove("HOOKSHOT_FFX_SDK");
+        // (Intel XeSS: the game loads the player's own libxess.dll; an SDK folder set on the PC is not passed on)
+        si.Environment.Remove("HOOKSHOT_XESS_SDK");
         // (the folder's own compiler, headers and libraries, when it has them: nothing of the PC's but Windows' own)
-        var sets = new[] { ("EMSDK", "emsdk"), ("RX_CPM", "cpm"), ("WGPU_NATIVE", "wgpu-native") };
+        var sets = new[] { ("EMSDK", "emsdk"), ("RX_CPM", "cpm") };
         foreach (var (name, folder) in sets)
         {
             var path = Path.Combine(tools.Root, folder);

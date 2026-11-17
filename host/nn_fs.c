@@ -6,6 +6,7 @@
    hos_romfs_dir and hos_user_dir are set by hos_main.c. Reads are positional (ReadFile with an offset), so any number
    of guest threads can read one file at once. Results: switchbrew "Error codes" (module 2 = fs). */
 #include "hos.h"
+#include "save_backup.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -115,6 +116,22 @@ static int mount(const char *name, const char *root, int writable) {   /* 0: the
     ReleaseSRWLockExclusive(&mount_lock);
     if (writable) CreateDirectoryA(root, NULL);
     hos_log("fs: mounted %s: -> %s", name, root);
+#ifdef _WIN32   /* (a Windows path pattern: the log line would mislead elsewhere) */
+    if (!writable && !strcmp(name, "content")) {
+        /* (hookshot) Which version the RomFS is, by its resource size table's name (the supported build's says
+           Product.111): a game that died in its first second gave no other trace of the files it read */
+        char pattern[MAX_PATH];
+        WIN32_FIND_DATAA fd;
+        snprintf(pattern, sizeof pattern, "%s\\System\\Resource\\ResourceSizeTable*", root);
+        HANDLE f = FindFirstFileA(pattern, &fd);
+        if (f == INVALID_HANDLE_VALUE) {
+            hos_log("fs: the RomFS has no System\\Resource\\ResourceSizeTable file: the game files are incomplete");
+        } else {
+            hos_log("fs: RomFS resource table %s (%lu bytes)", fd.cFileName, (unsigned long)fd.nFileSizeLow);
+            FindClose(f);
+        }
+    }
+#endif
     return 1;
 }
 
@@ -329,7 +346,18 @@ HLE(_ZN2nn2fs7UnmountEPKc) {
         if (!strcmp(mounts[i].name, gstr(ARG(0)))) { mounts[i] = mounts[--nmounts]; break; }
     ReleaseSRWLockExclusive(&mount_lock);
 }
-HLE(_ZN2nn2fs6CommitEPKc) { RET(0); }
+/* nn::fs::Commit(mount name): the game's save data written. A save mount's commit backs the saves up outside the game folder
+   (host/save_backup.c, at most every 20 s) */
+HLE(_ZN2nn2fs6CommitEPKc) {
+    int is_save = 0;
+    const char *name = gstr(ARG(0));
+    AcquireSRWLockShared(&mount_lock);
+    for (int i = 0; i < nmounts; i++)
+        if (!strcmp(mounts[i].name, name)) { is_save = mounts[i].writable && strstr(mounts[i].root, "\\save\\") != NULL; break; }
+    ReleaseSRWLockShared(&mount_lock);
+    if (is_save) hos_save_backup_on_commit(hos_user_dir);
+    RET(0);
+}
 HLE(_ZN2nn2fs26SetPriorityOnCurrentThreadENS0_8PriorityE) {}
 
 /* ---- files ---------------------------------------------------------------------------------------------------- */

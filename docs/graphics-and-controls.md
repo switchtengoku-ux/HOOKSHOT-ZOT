@@ -5,7 +5,7 @@ below, then look up any single setting in the list at the bottom.
 
 ## Open the menu
 
-| | Open or close the menu | Move around it |
+| Input | Open or close the menu | Move around it |
 |---|---|---|
 | **Keyboard** | <kbd>F1</kbd>, <kbd>Insert</kbd> or <kbd>Esc</kbd> | <kbd>Q</kbd> and <kbd>E</kbd> (or <kbd>Tab</kbd> and <kbd>Shift</kbd>+<kbd>Tab</kbd>) switch tabs, the arrow keys choose and change, <kbd>Esc</kbd> goes back |
 | **Controller** | **Home**, or **Select** and **Start** together (or click the touchpad on a DualShock 4 or DualSense) | LB and RB switch tabs, the D-pad chooses and changes, A opens a page, B goes back |
@@ -22,7 +22,8 @@ below, then look up any single setting in the list at the bottom.
 
 *UI-only example from development build b2911d33 on Linux. The Custom values shown are illustrative, not recommended defaults.*
 
-Your choices are saved as you go, in `hookshot_options.ini` in the game folder. A setting marked **After a restart**
+Your choices are saved as you go, in `hookshot_options.ini`: with your saves when the launcher starts the game on Windows, the
+same file for every version, else in the game folder (the README says where). A setting marked **After a restart**
 applies the next time the game starts: when you close the menu it asks whether to restart. **Later** keeps the change
 for next time; **Restart now** starts the game again, and you lose any progress since your last save.
 

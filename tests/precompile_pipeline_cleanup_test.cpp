@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -15,6 +16,7 @@
 using VkPipeline = uint64_t;
 constexpr VkPipeline VK_NULL_HANDLE = 0;
 using VkPrimitiveTopology = unsigned;
+struct Program;   // (PipeEntry keeps the program object it was built from)
 #include "pipe_entry.inc"
 static thread_local bool note_locked = false;
 struct CacheMutex {
@@ -57,6 +59,8 @@ void vkDestroyPipeline(unsigned device, VkPipeline pipeline, const void* allocat
     CHECK(live.erase(pipeline) == 1);
     CHECK(++destroyed[pipeline] == 1);
 }
+// (the build's preparation run lets each pipeline go at once, HOOKSHOT_PREPARE_ONLY: not set here, so each is published)
+static bool env_on(const char* name) { const char* v = std::getenv(name); return v && *v && std::strcmp(v, "0") != 0; }
 static void run(Pre* pre, const Program* p, PipeNote& n) {
 #include "precompile_graphics.inc"
 }

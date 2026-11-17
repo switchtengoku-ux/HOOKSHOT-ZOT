@@ -82,7 +82,6 @@ before it starts.
    | From `tools` | To | Variable |
    |---|---|---|
    | `tools\cpm` | anywhere | `RX_CPM` points at it (Vulkan headers and FFmpeg; without it, system headers or `HOOKSHOT_*_HEADERS`, the standalone build stops) |
-   | `tools\wgpu-native` | anywhere | `WGPU_NATIVE` points at it (the WebGPU fallback renderer; without it the game is built without one) |
    | `tools\third_party` | `third_party\` | (its `.dll`, `.exe`, `.lib` and `.sha1` files, to the same places: `a64emit`, `lld-link`, `zbic` and SDL2) |
    | `tools\work` | `work\` | (hot-function list, link order, profile and icon; without it the game builds but runs slower) |
 
@@ -257,6 +256,9 @@ the development guide's [reference](docs/development.md#switches-for-testing-and
 
 - Match the file you are editing: there is no formatter configuration, so use the indentation, comment style and
   naming around you. Do not reformat unrelated code in the same change.
+- A function that keeps a rule written in the docs says where, in a comment just above it: `// doc: docs/<file>.md#<heading
+  anchor>` (`# doc:` in Python), with the rule's number or a few words after it. `tests/test_doc_anchors.py` fails on an
+  anchor whose file or heading is gone, so a renamed heading is fixed in the same change.
 - Keep OoT-specific code in new files where possible. `nx2/`, `host/` and `gpu/` are kept close to mkw-recomp so
   upstream fixes can be applied as a patch; keeping the paths and the shared files recognizable is what makes that
   work. Each sync names its new mkw-recomp base commit in the commit message.

@@ -36,14 +36,14 @@ def main():
     need("const bool quick = serial && intel_quick_compute() && !(ci.flags & VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT);" in build,
          "the quick build is not limited to the serial builds and the row")
     need("if (quick) ci.flags |= VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT;" in build, "the first build keeps the optimizer")
-    made = build[build.index("q.compute_pipeline = made;"):]
+    made = build[build.index("std::atomic_ref<VkPipeline>(q.compute_pipeline).store(made, std::memory_order_release);"):]
     need(made.index("if (quick) jobs_push_serial([job] { compute_optimize(const_cast<Program&>(*job)); });") <
          made.index("const int64_t ms"), "the optimized build is not queued once the quick one is made")
     need("jobs_push_serial([job] { compute_optimize(const_cast<Program&>(*job)); }, " not in build,
          "the optimized build is queued in the front lane, ahead of the passes still to be built")
     # (bound once made, the quick one kept: a recording may hold it)
     need("const VkPipeline optimized = p.compute_optimized.load(std::memory_order_acquire);" in dispatch and
-         "vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, optimized ? optimized : p.compute_pipeline);" in dispatch,
+         "vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, optimized ? optimized : pipe);" in dispatch,
          "the dispatch does not bind the optimized pipeline once made")
     opt = block(draw, "void compute_optimize(Program& q) {")
     need("compute_pipeline_info(q, true)" in opt and "DISABLE_OPTIMIZATION" not in opt, "the second build is not the optimized one")
@@ -97,11 +97,11 @@ def main():
          "return dev.props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;" in block(menu, "bool laptop_row() {"),
          "the weak laptop button shows on a dedicated card")
     apply = block(menu, "void weak_laptop_apply() {")
-    for want, why in (("apply_preset(1);", "Minimum's rows and memory budgets"),
+    for want, why in (("apply_preset(1);", "Minimum's rows and mip trimming"),
                       ("opts.resolution = ur::snap_render(upscaler(), 6);", "Render resolution 33%"),
                       ("opts.upscale = 0, opts.sharpness = 0;", "the plain window scale"),
                       ("opts.framegen = 0;", "frame generation off"),
-                      ("opts.intel_compiles = 0, opts.intel_quick = 1;", "Intel's shaders one at a time, quick compute builds"),
+                      ("opts.intel_compiles = 2, opts.intel_quick = 1;", "Intel's shaders one at a time, quick compute builds"),
                       ("opts.preset = 0;", "the Quality preset left on Minimum"),
                       ("restart_state.note(now);", "the restart asked for"),
                       ("save();", "saved")):

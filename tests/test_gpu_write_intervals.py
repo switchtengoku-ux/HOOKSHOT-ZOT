@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 DRIVER = r'''#define _CRT_SECURE_NO_WARNINGS 1
 #include <algorithm>
+#include "wrote_regions.h"   // (gpu_wrote_into asks the regions first)
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -114,7 +115,7 @@ def main():
         cpp, exe = Path(tmp) / "intervals.cpp", Path(tmp) / "intervals.exe"
         cpp.write_text(code, encoding="utf-8")
         subprocess.run([a.cxx, "-std=c++17", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function", "-Wno-unused-variable",
-                        str(cpp), "-o", str(exe)], check=True)
+                        "-I", str(ROOT / "gpu" / "vk"), str(cpp), "-o", str(exe)], check=True)
         r = subprocess.run([str(exe)], capture_output=True, text=True)
         if r.returncode:
             raise SystemExit("FAIL: a GPU buffer write is missed by the textures it wrote:\n" + r.stdout + r.stderr)

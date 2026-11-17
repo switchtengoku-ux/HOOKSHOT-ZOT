@@ -34,8 +34,7 @@ FIXTURE = r"""
 #include <string>
 #include "hookshot_env.h"
 using DWORD = unsigned long;
-constexpr int MAX_PATH = 260;
-static DWORD game_module_path(char *path, DWORD size) { return snprintf(path, size, "./hookshot.exe"); }
+static std::string options_path() { return "./hookshot_options.ini"; }   // (vk_paths.h: the user folder's)
 static void logf(const char*, ...) {}
 BODY
 LEVEL

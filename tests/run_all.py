@@ -3,12 +3,15 @@ gpu/vk/tests and a byte-compile of every tracked Python file. All of them run ev
 printed whole at the end, with a table of every check (slowest first), also to $GITHUB_STEP_SUMMARY when it is set.
 Exits 1 when anything failed.
 
-    python -I -B tests/run_all.py [--jobs N] [--timeout SECONDS] [--strict] [--no-skip] [--shard K/N] [name ...]
+    python -I -B tests/run_all.py [--jobs N] [--timeout SECONDS] [--strict] [--no-skip] [--shard K/N]
+                                  [--list] [--junit FILE] [--exact] [name ...]
     python -I -B tests/run_all.py --changed [BASE]   (only the checks that read files changed since BASE, origin/main)
 
-A name picks the checks whose path contains it. --strict: a check that needs a tool this PC lacks (a compiler, the
+A name picks the checks whose path contains it (--exact: only a check whose path is exactly the name; with names given
+and none matching, nothing runs and it exits 2). --strict: a check that needs a tool this PC lacks (a compiler, the
 SPIR-V or Vulkan headers, spirv-val) fails instead of being skipped (CI installs them all). --no-skip runs the checks a
-test skips on this OS too. Standard library only: no package is installed for the runner itself.
+test skips on this OS too. --list prints the checks a run would start, one a line, and runs none. --junit FILE also
+writes the results as JUnit XML. Standard library only: no package is installed for the runner itself.
 
 A test says what it needs in its own file, with up to three top-level assignments of plain literals (after its
 docstring and imports). The runner reads them with ast and never imports the test; a test that declares none runs with
@@ -31,6 +34,9 @@ OS's checks of 2 s or more, as CI last measured them (a check not in it counts a
 parts, which split the checks by those times so the parts take about as long (CI runs Windows in parts); every check is
 in exactly one part, whatever the times say, so stale times only make the parts uneven. After a full run on one OS,
 --write-times puts that run's times in the file, for that OS.
+
+The byte-compile of every tracked .py is listed as BYTE_COMPILE_ATOM, a name with no spaces, so it can be passed on a
+command line (--exact).
 """
 import argparse
 import ast
@@ -58,6 +64,7 @@ OSES = ("linux", "windows")
 
 # (each OS's measured seconds per check, for the order and the --shard split: see the docstring)
 TIMES = os.path.join(ROOT, "tests", "run_all_times.json")
+BYTE_COMPILE_ATOM = "tests/byte_compile_tracked.py"
 DEFAULT_SECS = 1.0   # (a check not in TIMES: most take about that or less)
 TIMES_MIN = 2.0      # (--write-times keeps only the checks that took this long or longer)
 
@@ -391,6 +398,30 @@ def compile_all():
     return Result(1 if bad else 0, text.encode())
 
 
+def write_junit(path, checks, wall):
+    """The run's checks as JUnit XML (one testcase each, named and filed by its path; a failure carries its output, a
+    skip its reason), for a CI that shows test results from it"""
+    import xml.etree.ElementTree as ET
+    ran = [c for c in checks if not c.why_skip]
+    failed = sum(c.status != "pass" for c in ran)
+    suite = ET.Element("testsuite", name="run_all (%s)" % OS, tests=str(len(checks)), failures=str(failed),
+                       skipped=str(len(checks) - len(ran)), time="%.3f" % wall)
+    for c in checks:
+        case = ET.SubElement(suite, "testcase", name=c.name, classname=c.name, time="%.3f" % (0 if c.why_skip else c.secs))
+        if not c.name.startswith("("):
+            case.set("file", c.name)
+        if c.why_skip:
+            ET.SubElement(case, "skipped", message=c.why_skip)
+        elif c.status != "pass":
+            fail = ET.SubElement(case, "failure", message=c.status)
+            fail.text = "".join(ch for ch in c.output if ch in "\t\n\r" or ord(ch) >= 0x20)
+    folder = os.path.dirname(os.path.abspath(path))
+    os.makedirs(folder, exist_ok=True)
+    root = ET.Element("testsuites")
+    root.append(suite)
+    ET.ElementTree(root).write(path, encoding="utf-8", xml_declaration=True)
+
+
 def unicode_output():
     """A failed check's output is printed whole, and compilers and tests write quotes, arrows and U+FFFD (from the
     "replace" decode). Into a pipe (CI's log, an agent's tool, `| more`) Windows' Python writes the ANSI code page,
@@ -419,6 +450,11 @@ def main():
                    help="write this run's times to tests/run_all_times.json for this OS (a full run only)")
     p.add_argument("--changed", nargs="?", const="origin/main", metavar="BASE",
                    help="only the checks that read a file changed since BASE's merge base (default origin/main), or an untracked one")
+    p.add_argument("--list", action="store_true",
+                   help="print the name of each check a run would start, one a line, and run none")
+    p.add_argument("--junit", metavar="FILE", help="also write the results as JUnit XML to FILE")
+    p.add_argument("--exact", action="store_true",
+                   help="a name must be a check's whole path, and with names given and none matching, run nothing")
     a = p.parse_args()
     if a.write_times and (a.names or a.shard):
         p.error("--write-times needs a full run: no names, no --shard")
@@ -437,9 +473,12 @@ def main():
         for line in stale:
             print("  " + line, file=sys.stderr)
         return 2
+    def picked(name):
+        return name in a.names if a.exact else any(n in name for n in a.names)
+
     # (only the tests asked for: a bad declaration elsewhere does not stop a run of one named test)
     if a.names:
-        tests = [rel for rel in tests if any(n in rel for n in a.names)]
+        tests = [rel for rel in tests if picked(rel)]
     changed, everything = None, True
     if a.changed is not None:
         changed = changed_files(a.changed)
@@ -464,7 +503,7 @@ def main():
         c = Check(rel, run)
         if decls[rel]["unparsed"]:   # (no skip to read: the same failure on every OS, not run)
             c.run = lambda why=decls[rel]["unparsed"]: Result(1, (why + "\n").encode())
-        elif reason and not a.no_skip and not any(n in rel for n in a.names):
+        elif reason and not a.no_skip and not picked(rel):
             c.why_skip = reason
         elif missing and not a.strict:
             c.why_skip = "not found here: " + ", ".join(missing)
@@ -482,15 +521,23 @@ def main():
                 c.why_skip = None
                 c.run = lambda m=missing: Result(1, ("not found: %s (--strict)\n" % ", ".join(m)).encode())
         checks.append(c)
-    checks.append(Check("(byte-compile every tracked .py)", compile_all))
+    checks.append(Check(BYTE_COMPILE_ATOM, compile_all))
     if a.names:
-        checks = [c for c in checks if any(n in c.name for n in a.names)]
+        checks = [c for c in checks if picked(c.name)]
+        if a.exact and not checks:
+            print("run_all: --exact: no check matches %s, nothing run" % ", ".join(a.names), file=sys.stderr)
+            return 2
     part = ""
     if a.shard:
         k, n = a.shard
         mine = shard_of([c.name for c in checks], times, n)
         checks = [c for c in checks if mine[c.name] == k - 1]
         part = ", part %d/%d" % (k, n) if n > 1 else ""
+    if a.list:
+        for c in checks:
+            if not c.why_skip:
+                print(c.name)
+        return 0
     rank = {name: i for i, name in enumerate(by_time([c.name for c in checks], times))}
 
     def one(c):
@@ -550,6 +597,8 @@ def main():
             lines.append("| %s | %s | `%s` | %s |" % (mark[c.status], "" if c.why_skip else "%.1f s" % c.secs, c.name, note))
         with open(summary, "a", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n\n")
+    if a.junit:
+        write_junit(a.junit, checks, wall)
     if a.write_times:
         write_times(to_run)
         print("times for %s written to %s" % (OS, os.path.relpath(TIMES, ROOT)))
