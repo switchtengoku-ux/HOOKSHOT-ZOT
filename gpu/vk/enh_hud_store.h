@@ -14,7 +14,11 @@ namespace enh_hud_store {
 enum { VISIBLE, SIZE, X, Y, ALPHA, FIELDS };
 enum { PRESET_FULL, PRESET_MINIMAL, PRESET_HIDDEN, PRESET_CUSTOM };
 // (the order is the menu's and the option ids': ENH_HUD_NAMES in gpu/vk/vk_menu.cpp, ENH_HUD_ELEMENTS in host/enh_hud.c)
-inline const char* const ELEMENT_KEYS[HOS_ENH_HUD_ELEMENTS] = {"hearts", "magic", "items", "buttons", "minimap", "place"};
+inline const char* const ELEMENT_KEYS[HOS_ENH_HUD_ELEMENTS] = {"hearts", "magic", "items", "buttons", "minimap", "place",
+                                                               "dungeon_map"};
+// (the dungeon minimap, with its keys count, was the minimap's until it became an element of its own: an options file or a
+// slot with no line of its own takes the minimap's settings, so a layout made before keeps both where they were)
+inline constexpr int MINIMAP = 4, DUNGEON_MAP = 6;
 inline const char* const FIELD_KEYS[FIELDS] = {"visible", "size", "x", "y", "opacity"};
 // (x and y: percent of the screen's width and height, so an element can go anywhere on any screen shape; host/enh_hud.c)
 inline constexpr int LO[FIELDS] = {0, 25, -100, -100, 10}, HI[FIELDS] = {1, 200, 100, 100, 100};
@@ -76,8 +80,13 @@ enum { SLOTS = 3 };
 struct Slot {
     Store s;
     int scale = 100, fade = 100;
-    bool used = false;
+    bool used = false, dungeon_seen = false;   // (dungeon_seen: a line of the dungeon minimap's own read)
 };
+
+/// The dungeon minimap's settings as the minimap's (for an options file or a slot with none of its own)
+inline void inherit_dungeon_map(Store& s) {
+    for (int f = 0; f < FIELDS; f++) s.v[DUNGEON_MAP][f] = s.v[MINIMAP][f];
+}
 
 /// A line "enh_hud_slot<N>_..." = value: true, and the slot's value set (clamped); false for any other key
 inline bool read_slot_key(Slot (&slots)[SLOTS], const char* key, const char* value) {
@@ -91,6 +100,7 @@ inline bool read_slot_key(Slot (&slots)[SLOTS], const char* key, const char* val
         char full[64];
         snprintf(full, sizeof full, "enh_hud_%s", rest);
         if (!read_key(slot.s, full, value)) return false;
+        slot.dungeon_seen |= !strncmp(rest, "dungeon_map_", 12);
     }
     slot.used = true;
     return true;

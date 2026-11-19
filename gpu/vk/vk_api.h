@@ -83,12 +83,12 @@ enum { HOS_OPT_ENH_MUSIC_VOLUME = 1010, HOS_OPT_ENH_EFFECTS_VOLUME };
    camera from it (host/enh_photo.c) */
 enum { HOS_OPT_ENH_PHOTO = 1020 };
 /* (enhanced) the HUD editor (gpu/vk/enh_hud.cpp, host/enh_hud.c): HOS_OPT_ENH_HUD + element * 5 + field (visible 0/1,
-   size percent, X and Y canvas units, opacity percent), for HOS_ENH_HUD_ELEMENTS elements: 1100 to 1199 */
-#define HOS_ENH_HUD_ELEMENTS 6
+   size percent, X and Y percent of the screen, opacity percent), for HOS_ENH_HUD_ELEMENTS elements: 1100 to 1139 */
+#define HOS_ENH_HUD_ELEMENTS 7
 enum { HOS_OPT_ENH_HUD = 1100 };
 /* (enhanced) and after its elements' range: the whole HUD's size and opacity in percent (the Whole HUD rows), and a number
    that changes at each change of an element's settings (the host reads those again only then) */
-enum { HOS_OPT_ENH_HUD_SCALE = 1130, HOS_OPT_ENH_HUD_FADE, HOS_OPT_ENH_HUD_GEN };
+enum { HOS_OPT_ENH_HUD_SCALE = 1140, HOS_OPT_ENH_HUD_FADE, HOS_OPT_ENH_HUD_GEN };   /* (1130: before the dungeon minimap) */
 
 /* (hookshot) the controls' names (host/nn_hid.c, host/pad_sdl.c, the pad_ and key_ lines of hookshot_options.ini):
    the Switch's buttons in nn::hid's bit order, and a gamepad's inputs by position (the bottom face button first:

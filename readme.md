@@ -379,7 +379,7 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | HUD preset | Full, Minimal (the hearts alone), Hidden; Custom when the elements were chosen one by one (Hookshot Enhanced) | Full |
 | | Whole HUD size | 50% to 150%, in steps of 5 (on top of each element's own size) | 100% |
 | | Whole HUD opacity | 10% to 100%, in steps of 10 (on top of each element's own opacity) | 100% |
-| | HUD element | Hearts, Magic, Item buttons, Top-right buttons, Minimap, Place name (Hookshot Enhanced: the HUD editor's element) | Hearts |
+| | HUD element | Hearts, Magic, Item buttons, Top-right buttons, Minimap, Place name, Dungeon minimap (Hookshot Enhanced: the HUD editor's element) | Hearts |
 | | HUD visible | Off, On (the element chosen) | On |
 | | HUD size | 25% to 200%, in steps of 5 | 100% |
 | | HUD position X | -100% to +100% of the screen's width, in steps of 1 | +0% |

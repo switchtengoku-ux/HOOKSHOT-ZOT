@@ -891,7 +891,7 @@ const char* tx_enh_triggers(int v) { return v == 2 ? "Strong" : v == 1 ? "Light"
 const char* tx_enh_profile(int v);   // (enhanced) the Graphics profile row: enh_graphics_profiles.inc
 // (enhanced) the HUD editor's (enh_menu_hud.inc): its elements' names here, where menu_i18n.h's test finds them
 const char* const ENH_HUD_NAMES[HOS_ENH_HUD_ELEMENTS] = {"Hearts", "Magic", "Item buttons", "Top-right buttons",
-                                                         "Minimap", "Place name"};
+                                                         "Minimap", "Place name", "Dungeon minimap"};
 const char* const ENH_HUD_PRESET_NAMES[ENH_HUD_PRESET_CUSTOM + 1] = {"Full", "Minimal", "Hidden", "Custom"};
 // (the HUD slot rows' cells: the press, then for two seconds what it did, enh_menu_hud.inc enh_hud_slot_cell)
 const char* const ENH_HUD_SLOT_TEXTS[5] = {"Save", "Load", "Saved", "Loaded", "Empty slot"};

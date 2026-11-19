@@ -50,10 +50,13 @@ static const HudElement ENH_HUD_ELEMENTS[HOS_ENH_HUD_ELEMENTS] = {
                                                                                 left is 780 left of what they draw) */
     {"PlayerStatus_00", "N_ScaleR_00", A_ORIGIN, 0, 450, 0, 500, 0},        /* the item and action buttons at the top right
                                                                                (origin: the corner) */
-    {"MapMenu_00", NULL, A_BR, 0, 820, 0, 0, 900},                          /* the minimap (in a dungeon, its keys
-                                                                               count above it) */
+    {"MapMenu_00", NULL, A_BR, 0, 680, 0, 0, 620},                          /* the minimap, outside dungeons */
     {"Location_00", NULL, A_TOP, 0, 800, 800, 300, 0},                      /* the place's name */
+    {"MapMenu_00", NULL, A_BR, 0, 820, 0, 0, 900},                          /* the dungeon minimap, its keys count above it
+                                                                               (MapMenu_00's root as the minimap's: which of
+                                                                               the two it is, dungeon_on) */
 };
+enum { E_MINIMAP = 4, E_DUNGEON_MAP = 6 };
 enum { F_VISIBLE, F_SIZE, F_X, F_Y, F_ALPHA };
 /* (the game's own scaling group of the left gauges, hos_wide_ui.c's RULES: N_ScaleL_00, its origin at the 16:9 canvas's
    top left corner, holds the hearts and N_ScaleL_01, the magic's and the item buttons' group (its origin at the canvas's
@@ -61,13 +64,14 @@ enum { F_VISIBLE, F_SIZE, F_X, F_Y, F_ALPHA };
    into the corner and keeps its lining up (HOS_ENH_HUD_DIAG=1 logs showed it, 2026-11-19). Scaled each about its own
    point, the magic, whose point is in its bar's middle, came out of line; N_ScaleL_01 scaled too was scaled twice) */
 static const char *const ENH_HUD_GROUPS[] = {"N_ScaleL_00"};
-enum { IN_GROUP = 7 };   /* (a pane's mark in the map: a group's, or below one and in no element) */
+enum { IN_GROUP = 15 };   /* (a pane's mark in the map: a group's, or below one and in no element) */
 
 typedef struct { int visible, size, x, y, alpha; } HudSet;
 static HudSet set[HOS_ENH_HUD_ELEMENTS];   /* (what is applied: the element's own times the Whole HUD rows) */
 static int own_size[HOS_ENH_HUD_ELEMENTS];   /* (its own size alone: an element in a scaled group, which has the Whole HUD's) */
 static int whole_size = 100;                 /* (the Whole HUD size, percent) */
 static volatile int page_on;   /* (MapMenu_00 shows the pause menu's map page: map_page_shown) */
+static volatile int dungeon_on;   /* (MapMenu_00's minimap is a dungeon's (N_Dungeon_01), not an area's (N_Field_01)) */
 static int diag_left;   /* (lines left to log after a change: HOS_ENH_HUD_DIAG=1, the left gauges' panes as placed) */
 static int any_alpha, any_edit, restoring;   /* (restoring: presents left to put back the panes an opacity lowered) */
 int rx_option(int id, int otherwise);   /* host/rx_backend.c */
@@ -168,16 +172,16 @@ static int name_is(Ctx *c, uint64_t g, const char *want) {
 enum { MAP = 1 << 14 };
 static uint64_t map[MAP];
 static uint32_t slot(uint64_t pane) { return (uint32_t)((pane >> 4) * 0x9E3779B1u) & (MAP - 1); }
-static uint64_t slot_get(uint64_t pane) {   /* (its low byte: element 0 to 7, bit 4 lowered, bit 5 cut by a scissor pane
+static uint64_t slot_get(uint64_t pane) {   /* (its low byte: element 0 to 15, bit 4 lowered, bit 5 cut by a scissor pane
                                                 above it; 0 when another pane is there) */
     const uint64_t w = __atomic_load_n(&map[slot(pane)], __ATOMIC_ACQUIRE);
     return w >> 8 == pane ? w & 0xff : 0;
 }
-static int elem_get(uint64_t pane) { return (int)(slot_get(pane) & 7); }   /* (1 to 6, IN_GROUP, or 0) */
+static int elem_get(uint64_t pane) { return (int)(slot_get(pane) & 15); }   /* (1 to 7, IN_GROUP, or 0) */
 static int lowered_get(uint64_t pane) { return (int)(slot_get(pane) >> 4 & 1); }
 static int clipped_get(uint64_t pane) { return (int)(slot_get(pane) >> 5 & 1); }
 static void elem_put(uint64_t pane, int elem, int lowered, int clipped) {
-    __atomic_store_n(&map[slot(pane)], pane << 8 | (uint64_t)(elem & 7) | (uint64_t)(lowered != 0) << 4 | (uint64_t)(clipped != 0) << 5,
+    __atomic_store_n(&map[slot(pane)], pane << 8 | (uint64_t)(elem & 15) | (uint64_t)(lowered != 0) << 4 | (uint64_t)(clipped != 0) << 5,
                      __ATOMIC_RELEASE);
 }
 
@@ -212,6 +216,16 @@ static int own_element(Ctx *c, uint64_t pane, uint64_t parent) {
             page_on = page;
             hos_wide_ui_force = 3;   /* (the root was placed for the other this present: every pane made again) */
         }
+        /* (the minimap a dungeon's or an area's, by its own group drawn: two elements, each placed apart, since the area's
+           map is drawn in the middle of a frame its shape leaves part empty and the dungeon's fills its square, so one
+           move put them in different places (the owner's shots, 2026-11-19). A state as page_on, the root being placed
+           before its groups) */
+        const int dungeon = name_is(c, pname, "N_MiniMap_00") ? name_is(c, name, "N_Dungeon_01") ? 1
+                          : name_is(c, name, "N_Field_01") ? 0 : -1 : -1;
+        if (dungeon >= 0 && dungeon != dungeon_on) {
+            dungeon_on = dungeon;
+            hos_wide_ui_force = 3;
+        }
         return 0;
     }
     if (whole_size != 100 && parent && name_is(c, lname, "PlayerStatus_00")) {
@@ -235,7 +249,10 @@ static int own_element(Ctx *c, uint64_t pane, uint64_t parent) {
                         !strcmp(el->layout, "MapMenu_00") ? map_page_shown() : -1);
             }
             if (!names || pane < base || !name_is(c, recomp_load64(c, names + (pane - base) / P_SIZE * 8), "RootPane")) continue;
-            if (!strcmp(el->layout, "MapMenu_00") && map_page_shown()) return 0;
+            if (!strcmp(el->layout, "MapMenu_00")) {
+                if (map_page_shown()) return 0;
+                return (dungeon_on ? E_DUNGEON_MAP : E_MINIMAP) + 1;
+            }
             return e + 1;
         }
         const uint64_t base = recomp_load64(c, layout + L_PANES), names = recomp_load64(c, res + R_PANE_NAMES);

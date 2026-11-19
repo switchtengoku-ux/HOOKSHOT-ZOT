@@ -40,7 +40,7 @@ int main() {
     CHECK(s.set(2, X, -5000) && s.v[2][X] == -100);           /* x, y: percent of the screen, edge to edge */
     CHECK(s.set(2, Y, 100) && s.v[2][Y] == 100);
     CHECK(s.set(5, ALPHA, 0) && s.v[5][ALPHA] == 10);
-    CHECK(!s.set(6, SIZE, 50) && !s.set(0, FIELDS, 1) && !s.set(-1, SIZE, 50));
+    CHECK(!s.set(HOS_ENH_HUD_ELEMENTS, SIZE, 50) && !s.set(0, FIELDS, 1) && !s.set(-1, SIZE, 50));
     puts("ok: defaults and clamping");
 
     Store r;
@@ -84,7 +84,7 @@ int main() {
     CHECK(read_legacy_line(old, "2.2=384") && old.v[2][X] == 10);    /* canvas units then: 384 of 3840 is 10% */
     CHECK(read_legacy_line(old, "2.3=-540") && old.v[2][Y] == -25);  /* -540 of 2160 */
     CHECK(read_legacy_line(old, "3.2=-20") && old.v[3][X] == -1);    /* rounded to the nearest */
-    CHECK(!read_legacy_line(old, "# Hookshot Enhanced HUD editor") && !read_legacy_line(old, "6.0=1") &&
+    CHECK(!read_legacy_line(old, "# Hookshot Enhanced HUD editor") && !read_legacy_line(old, "7.0=1") &&
           !read_legacy_line(old, "0.5=1") && !read_legacy_line(old, "enh_hud_hearts_size=1"));
     puts("ok: the old enh_hud.ini lines");
 
@@ -135,6 +135,19 @@ int main() {
     r2.reset();
     CHECK(!read_key(r2, "enh_hud_slot1_hearts_x", "5"));   /* (a slot's line is not the HUD's own) */
     puts("ok: HUD slots");
+
+    /* the dungeon minimap, an element of its own: a file or slot from before takes the minimap's settings */
+    CHECK(!strcmp(ELEMENT_KEYS[DUNGEON_MAP], "dungeon_map") && !strcmp(ELEMENT_KEYS[MINIMAP], "minimap"));
+    Store d;
+    d.reset();
+    d.v[MINIMAP][X] = -60, d.v[MINIMAP][ALPHA] = 50;
+    inherit_dungeon_map(d);
+    CHECK(d.v[DUNGEON_MAP][X] == -60 && d.v[DUNGEON_MAP][ALPHA] == 50 && d.v[DUNGEON_MAP][VISIBLE] == 1);
+    CHECK(read_key(d, "enh_hud_dungeon_map_y", "30") && d.v[DUNGEON_MAP][Y] == 30 && d.v[MINIMAP][Y] == 0);
+    Slot ds[SLOTS];
+    CHECK(read_slot_key(ds, "enh_hud_slot1_minimap_x", "-5") && !ds[0].dungeon_seen);
+    CHECK(read_slot_key(ds, "enh_hud_slot1_dungeon_map_x", "7") && ds[0].dungeon_seen && ds[0].s.v[DUNGEON_MAP][X] == 7);
+    puts("ok: the dungeon minimap");
     return 0;
 }
 '''
@@ -257,7 +270,7 @@ def main():
     assert '"RootPane")) continue;' in host, "a whole-layout element is resized at a pane that is not its root again"
     own = cut(host, "static int own_element(Ctx *c, uint64_t pane, uint64_t parent) {")
     assert '"N_LocalMap_00")' in own and '"N_WorldMap_00")' in own and '"N_MiniMap_00")' in own and \
-        '"MapMenu_00") && map_page_shown()) return 0;' in own and "hos_wide_ui_force = 3;" in own and \
+        'if (map_page_shown()) return 0;' in own and '"N_Dungeon_01")' in own and '"N_Field_01")' in own and "(dungeon_on ? E_DUNGEON_MAP : E_MINIMAP) + 1" in own and "hos_wide_ui_force = 3;" in own and \
         '"N_MapIcon_00")' not in host, \
         "MapMenu_00's map page is told apart by its icons' group again: the dungeon minimap and its keys count are never " \
         "moved, and the pause menu's map page, caught opening, is moved with the minimap"
