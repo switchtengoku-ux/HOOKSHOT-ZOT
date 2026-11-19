@@ -125,6 +125,7 @@ const char* const bind_names[HOS_KEY_N] = {"a"};
 struct Host { int (*binding)(int, int, int); float (*aspect_ratio)(); };
 Host host_value{}, *host = &host_value;
 bool can_bind() { return false; }
+void enh_hud_save_lines(FILE*) {}   // (enhanced) the HUD editor's lines (gpu/vk/enh_hud.cpp)
 /* INI_KEY */
 /* SAVE */
 

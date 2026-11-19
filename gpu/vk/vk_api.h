@@ -86,6 +86,9 @@ enum { HOS_OPT_ENH_PHOTO = 1020 };
    size percent, X and Y canvas units, opacity percent), for HOS_ENH_HUD_ELEMENTS elements: 1100 to 1199 */
 #define HOS_ENH_HUD_ELEMENTS 6
 enum { HOS_OPT_ENH_HUD = 1100 };
+/* (enhanced) and after its elements' range: the whole HUD's size and opacity in percent (the Whole HUD rows), and a number
+   that changes at each change of an element's settings (the host reads those again only then) */
+enum { HOS_OPT_ENH_HUD_SCALE = 1130, HOS_OPT_ENH_HUD_FADE, HOS_OPT_ENH_HUD_GEN };
 
 /* (hookshot) the controls' names (host/nn_hid.c, host/pad_sdl.c, the pad_ and key_ lines of hookshot_options.ini):
    the Switch's buttons in nn::hid's bit order, and a gamepad's inputs by position (the bottom face button first:

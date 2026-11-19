@@ -111,6 +111,7 @@ int binding(int set, int button, int slot) { return set == HOS_BIND_PAD ? (slot 
 Host host_v{binding};
 Host* host = &host_v;
 bool can_bind() { return true; }
+void enh_hud_save_lines(FILE*) {}   // (enhanced) the HUD editor's lines (gpu/vk/enh_hud.cpp)
 
 @SAVE@
 
