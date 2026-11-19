@@ -893,9 +893,12 @@ const char* tx_enh_profile(int v);   // (enhanced) the Graphics profile row: enh
 const char* const ENH_HUD_NAMES[HOS_ENH_HUD_ELEMENTS] = {"Hearts", "Magic", "Item buttons", "Top-right buttons",
                                                          "Minimap", "Place name"};
 const char* const ENH_HUD_PRESET_NAMES[ENH_HUD_PRESET_CUSTOM + 1] = {"Full", "Minimal", "Hidden", "Custom"};
+// (the HUD slot rows' cells: the press, then for two seconds what it did, enh_menu_hud.inc enh_hud_slot_cell)
+const char* const ENH_HUD_SLOT_TEXTS[5] = {"Save", "Load", "Saved", "Loaded", "Empty slot"};
 const char* tx_enh_hud_element(int v);
 const char* tx_enh_hud_preset(int v);
 const char* tx_enh_hud_offset(int v);
+const char* tx_enh_hud_slot(int v);
 // (enhanced) its texts, here so that menu_i18n.h translates them (tests/test_menu_i18n.py reads this file): ENH_PROFILE_*
 const char* const enh_profile_texts[] = {
     "None saved", "Profile loaded.", "Profile saved.", "No profile saved yet: type a name in Save profile as.",
@@ -1486,14 +1489,20 @@ Row rows[] = {
      "Shows or hides the HUD element chosen above.", nullptr, false, true},
     {TAB_GAMEPLAY, "HUD size", &opts.enh_hud_size, 25, 200, 5, tx_percent,
      "The HUD element's size; it keeps to the edge of the screen it sits on.", nullptr, false, true},
-    {TAB_GAMEPLAY, "HUD position X", &opts.enh_hud_x, -800, 800, 20, tx_enh_hud_offset,
+    {TAB_GAMEPLAY, "HUD position X", &opts.enh_hud_x, -100, 100, 1, tx_enh_hud_offset,
      "Moves the HUD element left (lower) or right (higher).", nullptr, false, true},
-    {TAB_GAMEPLAY, "HUD position Y", &opts.enh_hud_y, -800, 800, 20, tx_enh_hud_offset,
+    {TAB_GAMEPLAY, "HUD position Y", &opts.enh_hud_y, -100, 100, 1, tx_enh_hud_offset,
      "Moves the HUD element down (lower) or up (higher).", nullptr, false, true},
     {TAB_GAMEPLAY, "HUD opacity", &opts.enh_hud_alpha, 10, 100, 10, tx_percent,
      "How solid the HUD element is drawn: lower lets the world show through.", nullptr, false, true},
     {TAB_GAMEPLAY, "Reset HUD", nullptr, 0, 0, 0, nullptr,
      "Puts every HUD element back as the game draws it."},
+    {TAB_GAMEPLAY, "HUD slot", &opts.enh_hud_slot, 0, 2, 1, tx_enh_hud_slot,
+     "The slot the two rows below save the HUD to and load it from.", nullptr, false, true},   // (enhanced)
+    {TAB_GAMEPLAY, "Save HUD to slot", nullptr, 0, 0, 0, nullptr,
+     "Keeps every HUD element's settings and the whole HUD's size and opacity in the slot chosen above."},   // (enhanced)
+    {TAB_GAMEPLAY, "Load HUD from slot", nullptr, 0, 0, 0, nullptr,
+     "Puts back every HUD element as the slot chosen above keeps it; an empty slot changes nothing."},   // (enhanced)
     {TAB_GAMEPLAY, "Text speed", &opts.text_speed, 0, 3, 1, tx_text_speed,
      "How fast the letters of dialogue and other messages appear.", hn_text_speed, false, true},
     {TAB_GAMEPLAY, "Text size", &opts.text_size, 0, 4, 1, tx_text_size,
@@ -1980,9 +1989,9 @@ constexpr int64_t kMarqueeStep = 150000000LL, kMarqueeRest = 1200000000LL;   // 
 int hover_tab = -1;
 int drag_row = -1;
 bool mouse_read = false;   // (the menu has read the mouse since it opened)
-bool is_slider(const Row& r) { return r.value == &opts.sharpness || r.value == &opts.mouse_sens || r.value == &opts.gyro_sens_x || r.value == &opts.gyro_sens_y || r.value == &opts.volume || r.value == &opts.camera_speed || r.value == &opts.fov || (r.name && (!strcmp(r.name, "Music volume") || !strcmp(r.name, "Effects volume") || (!strncmp(r.name, "HUD ", 4) && r.name[4] != 'e' && r.name[4] != 'v' && r.name[4] != 'p') || !strncmp(r.name, "Whole HUD", 9))) /* (enhanced) host/enh_audio.c, host/enh_hud.c */; }
+bool is_slider(const Row& r) { return r.value == &opts.sharpness || r.value == &opts.mouse_sens || r.value == &opts.gyro_sens_x || r.value == &opts.gyro_sens_y || r.value == &opts.volume || r.value == &opts.camera_speed || r.value == &opts.fov || (r.name && (!strcmp(r.name, "Music volume") || !strcmp(r.name, "Effects volume") || (!strncmp(r.name, "HUD ", 4) && r.name[4] != 'e' && r.name[4] != 'v' && strncmp(r.name + 4, "pr", 2) && strncmp(r.name + 4, "sl", 2)) || !strncmp(r.name, "Whole HUD", 9))) /* (enhanced) host/enh_audio.c, host/enh_hud.c */; }
 /// (a scale: the arrows and a click stop at its ends; Rumble strength would go from Off to its strongest)
-bool stops_at_ends(const Row& r) { return r.value == &opts.ultrawide || r.value == &opts.mouse_sens || r.value == &opts.rumble || r.value == &opts.gyro_sens_x || r.value == &opts.gyro_sens_y || r.value == &opts.volume || r.value == &opts.camera_speed || r.value == &opts.fov || (r.name && (!strcmp(r.name, "Music volume") || !strcmp(r.name, "Effects volume") || (!strncmp(r.name, "HUD ", 4) && r.name[4] != 'e' && r.name[4] != 'v' && r.name[4] != 'p') || !strncmp(r.name, "Whole HUD", 9))) /* (enhanced) host/enh_audio.c, host/enh_hud.c */; }
+bool stops_at_ends(const Row& r) { return r.value == &opts.ultrawide || r.value == &opts.mouse_sens || r.value == &opts.rumble || r.value == &opts.gyro_sens_x || r.value == &opts.gyro_sens_y || r.value == &opts.volume || r.value == &opts.camera_speed || r.value == &opts.fov || (r.name && (!strcmp(r.name, "Music volume") || !strcmp(r.name, "Effects volume") || (!strncmp(r.name, "HUD ", 4) && r.name[4] != 'e' && r.name[4] != 'v' && strncmp(r.name + 4, "pr", 2) && strncmp(r.name + 4, "sl", 2)) || !strncmp(r.name, "Whole HUD", 9))) /* (enhanced) host/enh_audio.c, host/enh_hud.c */; }
 /// (the ini's Rumble strength on the menu's steps: 0 to 150, the nearest 25)
 int rumble_step(int v) { return (std::min(std::max(v, 0), 150) + 12) / 25 * 25; }
 // (hookshot) A run's environment over a saved row (RX_VK_PACE=1, HOS_OUTPUT_RES=...): for that run only. save() writes the
@@ -2045,7 +2054,7 @@ const char* ini_key(const Row& r) {
     if (r.name && !strcmp(r.name, "Adaptive triggers")) return "enh_triggers";
     if (r.name && !strcmp(r.name, "Music volume")) return "enh_music_volume";
     if (r.name && !strcmp(r.name, "Graphics profile")) return "enh_graphics_profile";
-    if (r.name && !strncmp(r.name, "HUD ", 4)) return r.name[4] == 'e' ? "enh_hud_element" : r.name[4] == 'p' ? "enh_hud_preset" : r.name[4] == 'v' ? "enh_hud_visible" : r.name[4] == 's' ? "enh_hud_size" : r.name[4] == 'o' ? "enh_hud_opacity" : r.name[13] == 'X' ? "enh_hud_x" : "enh_hud_y";
+    if (r.name && !strncmp(r.name, "HUD ", 4)) return r.name[4] == 'e' ? "enh_hud_element" : !strncmp(r.name + 4, "pr", 2) ? "enh_hud_preset" : r.name[4] == 'v' ? "enh_hud_visible" : !strncmp(r.name + 4, "sl", 2) ? "enh_hud_slot" : r.name[4] == 's' ? "enh_hud_size" : r.name[4] == 'o' ? "enh_hud_opacity" : r.name[13] == 'X' ? "enh_hud_x" : "enh_hud_y";
     if (r.name && !strcmp(r.name, "Effects volume")) return "enh_effects_volume";
     if (r.name && !strncmp(r.name, "Whole HUD", 9)) return r.name[10] == 's' ? "enh_hud_scale" : "enh_hud_fade";
     static char k[32];
@@ -3601,6 +3610,7 @@ void row_value_cell(ui::Ctx& c, const Row& r, ImVec2 va, ImVec2 vb, bool selecte
         else if (&r == &rows[kBugReportRow]) choice_cell(c, va, vb, bug_report_cell(), selected, false, false);   // (how the last report went)
         else if (enh_photo_row(r)) choice_cell(c, va, vb, enh_photo_cell(r), selected, false, false);   // (enhanced) the photo mode
         else if (enh_hud_reset_row(r)) choice_cell(c, va, vb, "Reset", selected, false, false);   // (enhanced) the HUD editor
+        else if (enh_hud_slot_row(r)) choice_cell(c, va, vb, enh_hud_slot_cell(r), selected, false, false);   // (enhanced)
         else {
             choice_cell(c, va, vb, "", selected, false, false);
             ui::triangle(c, ImVec2(vb.x - 15 * s, mid), 10 * s, 1, selected ? ui::kGoldInk : ui::kInk);
@@ -5370,7 +5380,9 @@ int menu_setting_set(const char* key, int value, MkwVkSetting* out) {
         }
         save();
     } else if (want != *r.value) {
+        enh_hud_sync();   // (enhanced) the HUD editor's rows in step first, then the change applied (enh_menu_hud.inc)
         set_row(r, want, want > *r.value ? 1 : -1);
+        enh_hud_sync();   // (enhanced)
     }
     menu_refresh = true;
     bridge_fill(i, out);
@@ -6018,6 +6030,7 @@ void menu_tick() {
         else if (press[7] && enh_profile_row(r)) enh_profile_load(), press[7] = false, changed = true;   // (enhanced)
         else if (press[7] && enh_photo_row(r)) enh_photo_press(r), press[7] = false, changed = true;   // (enhanced)
         else if (press[7] && enh_hud_reset_row(r)) enh_hud_reset_press(), press[7] = false, changed = true;   // (enhanced)
+        else if (press[7] && enh_hud_slot_row(r)) enh_hud_slot_press(r), press[7] = false, changed = true;   // (enhanced)
         else if (const FieldRow* f = press[7] ? field_row(r) : nullptr) edit_start(*f->field, f->apply), changed = true;   // (hookshot)
         else if (press[7] && !r.value && can_bind()) page = 1, csel = 0, ccol = menu_hit::kCtlPrimary, changed = true;
         if ((press[3] || press[4] || press[7]) && r.value) {   // (Enter, or A, as Right)

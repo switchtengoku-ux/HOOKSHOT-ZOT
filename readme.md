@@ -382,10 +382,13 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | HUD element | Hearts, Magic, Item buttons, Top-right buttons, Minimap, Place name (Hookshot Enhanced: the HUD editor's element) | Hearts |
 | | HUD visible | Off, On (the element chosen) | On |
 | | HUD size | 25% to 200%, in steps of 5 | 100% |
-| | HUD position X | -800 to +800, in steps of 20 | +0 |
-| | HUD position Y | -800 to +800, in steps of 20 | +0 |
+| | HUD position X | -100% to +100% of the screen's width, in steps of 1 | +0% |
+| | HUD position Y | -100% to +100% of the screen's height, in steps of 1 | +0% |
 | | HUD opacity | 10% to 100%, in steps of 10 | 100% |
 | | Reset HUD | Every HUD element back as the game draws it | None |
+| | HUD slot | 1 to 3: the slot the two rows below use | 1 |
+| | Save HUD to slot | Keeps every element and the whole HUD's size and opacity in that slot | None |
+| | Load HUD from slot | Puts the HUD back as that slot keeps it (an empty slot changes nothing) | None |
 | | Text speed | Normal, 2x, 4x, Instant | Normal |
 | | Text size | Original, 110%, 125%, 150%, 175% (dialogue, Navi and signs) | Original |
 | | Skip title screen | Off, On (after a restart) | Off |

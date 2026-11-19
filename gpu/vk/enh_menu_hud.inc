@@ -11,7 +11,7 @@ const char* tx_enh_hud_element(int v) { return ENH_HUD_NAMES[std::clamp(v, 0, HO
 const char* tx_enh_hud_preset(int v) { return ENH_HUD_PRESET_NAMES[std::clamp(v, 0, (int)ENH_HUD_PRESET_CUSTOM)]; }
 const char* tx_enh_hud_offset(int v) {
     static char b[16];
-    snprintf(b, sizeof b, "%+d", v);
+    snprintf(b, sizeof b, "%+d%%", v);   // (percent of the screen's width or height)
     return b;
 }
 int* enh_hud_rows[ENH_HUD_FIELDS] = {&opts.enh_hud_visible, &opts.enh_hud_size, &opts.enh_hud_x, &opts.enh_hud_y,
@@ -45,5 +45,35 @@ void enh_hud_reset_press() {
     opts.enh_hud_scale = opts.enh_hud_fade = 100;
     enh_hud_show(std::clamp(opts.enh_hud_sel, 0, HOS_ENH_HUD_ELEMENTS - 1));
     opts.enh_hud_preset = enh_hud_preset_now();
+    save();
+}
+/// The HUD slot rows: HUD slot chooses 1 to 3, Save HUD to slot keeps the HUD there, Load HUD from slot puts it back (an
+/// empty slot changes nothing); both saved in hookshot_options.ini (enh_hud_slot<N>_ lines, enh_hud_store.h)
+const char* tx_enh_hud_slot(int v) {
+    static char b[8];
+    snprintf(b, sizeof b, "%d", std::clamp(v, 0, 2) + 1);
+    return b;
+}
+bool enh_hud_slot_row(const Row& r) { return !r.value && (!strcmp(r.name, "Save HUD to slot") || !strcmp(r.name, "Load HUD from slot")); }
+int enh_hud_slot_done = 0;            // (what the last press did: 2 saved, 3 loaded, 4 the slot was empty; ENH_HUD_SLOT_TEXTS)
+int64_t enh_hud_slot_done_until = 0;  // (shown until then, prof_now's ns)
+/// A HUD slot row's cell: Save or Load, or for two seconds after a press on it what it did
+const char* enh_hud_slot_cell(const Row& r) {
+    const bool save_row = r.name[0] == 'S';
+    if (enh_hud_slot_done && prof_now() < enh_hud_slot_done_until && save_row == (enh_hud_slot_done == 2))
+        return ENH_HUD_SLOT_TEXTS[enh_hud_slot_done];
+    return ENH_HUD_SLOT_TEXTS[save_row ? 0 : 1];
+}
+void enh_hud_slot_press(const Row& r) {
+    const int slot = std::clamp(opts.enh_hud_slot, 0, 2);
+    const bool save_row = r.name[0] == 'S';
+    const bool loaded = !save_row && enh_hud_slot_load(slot, &opts.enh_hud_scale, &opts.enh_hud_fade);
+    enh_hud_slot_done = save_row ? 2 : loaded ? 3 : 4, enh_hud_slot_done_until = prof_now() + 2000000000LL;
+    if (save_row) enh_hud_slot_save(slot, opts.enh_hud_scale, opts.enh_hud_fade);
+    else if (!loaded) return;
+    else {
+        enh_hud_show(std::clamp(opts.enh_hud_sel, 0, HOS_ENH_HUD_ELEMENTS - 1));
+        opts.enh_hud_preset = enh_hud_preset_now();
+    }
     save();
 }

@@ -630,6 +630,8 @@ static void store_f(Ctx *c, uint64_t a, float f) {
     recomp_store32(c, a, u);
 }
 
+static void placed(Ctx *c, uint64_t pane, uint64_t parent);   /* (enhanced) below: the moves, hos_wide_ui_placed's own */
+
 void hos_wide_ui_placed(Ctx *c, uint64_t pane) {
     const uint64_t parent = ui_parent;
     ui_parent = 0;
@@ -638,6 +640,19 @@ void hos_wide_ui_placed(Ctx *c, uint64_t pane) {
         extern void hos_enh_hud_placed(Ctx *c, uint64_t pane, uint64_t parent) __attribute__((weak));
         if (hos_enh_hud_placed) hos_enh_hud_placed(c, pane, parent);
     }
+    /* (enhanced) the HUD editor's place (host/enh_hud.c): made after this file's moves, so a HUD element moved across the
+       screen is not taken for one on the other side; its children take it as their parent's move */
+    extern int hos_enh_hud_shift(Ctx *c, uint64_t pane, float x, float y, float *dx, float *dy) __attribute__((weak));
+    placed(c, pane, parent);
+    float dx, dy;
+    const float x = load_f(c, pane + PANE_X), y = load_f(c, pane + PANE_Y);
+    if (!(hos_enh_hud_shift && hos_enh_hud_shift(c, pane, x, y, &dx, &dy))) return;
+    store_f(c, pane + PANE_X, x + dx), store_f(c, pane + PANE_Y, y + dy);
+    Node *n = ui_on ? node_find(pane) : NULL;
+    if (n && n->layout && !n->dead) n->moved += dx, n->movedy += dy;
+}
+
+static void placed(Ctx *c, uint64_t pane, uint64_t parent) {   /* (enhanced) hos_wide_ui_placed's moves, as they were */
     if (!ui_on) return;   /* (off: the transforms are the game's) */
     const Node *pn = parent ? node_find(parent) : NULL;
     if (parent && !(pn && pn->layout && !pn->dead && pn->tree)) {   /* (a menu's pane, or a HUD part in one: not noted. A pane

@@ -16,7 +16,8 @@ enum { PRESET_FULL, PRESET_MINIMAL, PRESET_HIDDEN, PRESET_CUSTOM };
 // (the order is the menu's and the option ids': ENH_HUD_NAMES in gpu/vk/vk_menu.cpp, ENH_HUD_ELEMENTS in host/enh_hud.c)
 inline const char* const ELEMENT_KEYS[HOS_ENH_HUD_ELEMENTS] = {"hearts", "magic", "items", "buttons", "minimap", "place"};
 inline const char* const FIELD_KEYS[FIELDS] = {"visible", "size", "x", "y", "opacity"};
-inline constexpr int LO[FIELDS] = {0, 25, -800, -800, 10}, HI[FIELDS] = {1, 200, 800, 800, 100};
+// (x and y: percent of the screen's width and height, so an element can go anywhere on any screen shape; host/enh_hud.c)
+inline constexpr int LO[FIELDS] = {0, 25, -100, -100, 10}, HI[FIELDS] = {1, 200, 100, 100, 100};
 inline constexpr int HEARTS = 0;   // (the one element the Minimal preset keeps)
 
 inline int default_of(int field) { return field == VISIBLE ? 1 : field == SIZE || field == ALPHA ? 100 : 0; }
@@ -58,13 +59,52 @@ inline void write_lines(const Store& s, FILE* f) {
         for (int k = 0; k < FIELDS; k++) fprintf(f, "enh_hud_%s_%s=%d\n", ELEMENT_KEYS[e], FIELD_KEYS[k], s.v[e][k]);
 }
 
-/// A line of the enh_hud.ini from before: "<element>.<field>=<value>" (true when it was one)
+/// A line of the enh_hud.ini from before: "<element>.<field>=<value>" (true when it was one; its x and y were canvas units
+/// of the 3840 x 2160 canvas, made percent of it)
 inline bool read_legacy_line(Store& s, const char* line) {
     int e, k, v;
     if (line[0] == '#' || sscanf(line, "%d.%d=%d", &e, &k, &v) != 3 || e < 0 || e >= HOS_ENH_HUD_ELEMENTS || k < 0 || k >= FIELDS)
         return false;
+    if (k == X || k == Y) v = (int)((v * 100 + (v < 0 ? -1 : 1) * (k == X ? 1920 : 1080)) / (k == X ? 3840 : 2160));
     s.v[e][k] = std::clamp(v, LO[k], HI[k]);
     return true;
+}
+
+/// A saved HUD (the HUD slot rows): every element's settings and the Whole HUD rows, kept as "enh_hud_slot<N>_<element>_
+/// <field>" and "enh_hud_slot<N>_scale" / "_fade" lines (N from 1); a slot with no line yet is empty (Load HUD does nothing)
+enum { SLOTS = 3 };
+struct Slot {
+    Store s;
+    int scale = 100, fade = 100;
+    bool used = false;
+};
+
+/// A line "enh_hud_slot<N>_..." = value: true, and the slot's value set (clamped); false for any other key
+inline bool read_slot_key(Slot (&slots)[SLOTS], const char* key, const char* value) {
+    if (strncmp(key, "enh_hud_slot", 12) != 0 || key[12] < '1' || key[12] > '0' + SLOTS || key[13] != '_') return false;
+    Slot& slot = slots[key[12] - '1'];
+    if (!slot.used) slot.s.reset();
+    const char* rest = key + 14;
+    if (!strcmp(rest, "scale")) slot.scale = std::clamp(atoi(value), 50, 150);
+    else if (!strcmp(rest, "fade")) slot.fade = std::clamp(atoi(value), 10, 100);
+    else {
+        char full[64];
+        snprintf(full, sizeof full, "enh_hud_%s", rest);
+        if (!read_key(slot.s, full, value)) return false;
+    }
+    slot.used = true;
+    return true;
+}
+
+/// The used slots' lines
+inline void write_slot_lines(const Slot (&slots)[SLOTS], FILE* f) {
+    for (int n = 0; n < SLOTS; n++) {
+        if (!slots[n].used) continue;
+        fprintf(f, "enh_hud_slot%d_scale=%d\nenh_hud_slot%d_fade=%d\n", n + 1, slots[n].scale, n + 1, slots[n].fade);
+        for (int e = 0; e < HOS_ENH_HUD_ELEMENTS; e++)
+            for (int k = 0; k < FIELDS; k++)
+                fprintf(f, "enh_hud_slot%d_%s_%s=%d\n", n + 1, ELEMENT_KEYS[e], FIELD_KEYS[k], slots[n].s.v[e][k]);
+    }
 }
 
 /// The preset the elements' visibility is: Full (all), Minimal (the hearts alone), Hidden (none), else Custom

@@ -69,6 +69,7 @@ int failures = 0, checks = 0;
 void menu_debug_rows(int, int) { CHECK(false); }
 void logf(const char*, ...) {}   // (declared ahead of the options code cut in below: else its logf is C's logf(float))
 void enh_hud_save_lines(FILE*) {}   // (enhanced) the HUD editor's lines (gpu/vk/enh_hud.cpp)
+void enh_hud_sync() {}   // (enhanced) the HUD editor's rows in step (gpu/vk/enh_menu_hud.inc)
 /* OPTIONS */
 /* AUTO_PRESET */
 Options opts;

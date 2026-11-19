@@ -14,6 +14,7 @@ python -I -B tests/test_enh_hud.py [--cc clang] [--cxx clang++]
 """
 import argparse
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 
@@ -36,7 +37,8 @@ int main() {
     CHECK(s.set(0, SIZE, 150) && s.v[0][SIZE] == 150);
     CHECK(!s.set(0, SIZE, 150));                              /* the same value: no change */
     CHECK(s.set(1, SIZE, 999) && s.v[1][SIZE] == 200);        /* clamped to the row's range */
-    CHECK(s.set(2, X, -5000) && s.v[2][X] == -800);
+    CHECK(s.set(2, X, -5000) && s.v[2][X] == -100);           /* x, y: percent of the screen, edge to edge */
+    CHECK(s.set(2, Y, 100) && s.v[2][Y] == 100);
     CHECK(s.set(5, ALPHA, 0) && s.v[5][ALPHA] == 10);
     CHECK(!s.set(6, SIZE, 50) && !s.set(0, FIELDS, 1) && !s.set(-1, SIZE, 50));
     puts("ok: defaults and clamping");
@@ -45,7 +47,8 @@ int main() {
     r.reset();
     CHECK(read_key(r, "enh_hud_hearts_size", "150") && r.v[0][SIZE] == 150);
     CHECK(read_key(r, "enh_hud_place_opacity", "5\n") && r.v[5][ALPHA] == 10);
-    CHECK(read_key(r, "enh_hud_minimap_y", "-120") && r.v[4][Y] == -120);
+    CHECK(read_key(r, "enh_hud_minimap_y", "-12") && r.v[4][Y] == -12);
+    CHECK(read_key(r, "enh_hud_items_x", "-640") && r.v[2][X] == -100);   /* past the edge: clamped */
     CHECK(read_key(r, "enh_hud_buttons_visible", "0") && r.v[3][VISIBLE] == 0);
     const char* others[] = {"enh_hud_scale", "enh_hud_fade", "enh_hud_preset", "enh_hud_element", "enh_hud_size",
                             "enh_hud_hearts", "enh_hud_hearts_", "enh_hud_heartsx_size", "enh_hud_hearts_sizes",
@@ -78,6 +81,9 @@ int main() {
     CHECK(read_legacy_line(old, "0.1=150\n") && old.v[0][SIZE] == 150);
     CHECK(read_legacy_line(old, "4.4=60") && old.v[4][ALPHA] == 60);
     CHECK(read_legacy_line(old, "1.0=0") && old.v[1][VISIBLE] == 0);
+    CHECK(read_legacy_line(old, "2.2=384") && old.v[2][X] == 10);    /* canvas units then: 384 of 3840 is 10% */
+    CHECK(read_legacy_line(old, "2.3=-540") && old.v[2][Y] == -25);  /* -540 of 2160 */
+    CHECK(read_legacy_line(old, "3.2=-20") && old.v[3][X] == -1);    /* rounded to the nearest */
     CHECK(!read_legacy_line(old, "# Hookshot Enhanced HUD editor") && !read_legacy_line(old, "6.0=1") &&
           !read_legacy_line(old, "0.5=1") && !read_legacy_line(old, "enh_hud_hearts_size=1"));
     puts("ok: the old enh_hud.ini lines");
@@ -98,6 +104,37 @@ int main() {
     p.v[0][VISIBLE] = 0, p.v[2][VISIBLE] = 0, p.v[3][VISIBLE] = 0, p.v[4][VISIBLE] = 0, p.v[5][VISIBLE] = 0;
     CHECK(preset_of(p) == PRESET_CUSTOM);                     /* one element shown, not the hearts */
     puts("ok: presets");
+
+    /* the HUD slots: written and read back, other keys left alone, an unused slot not written */
+    Slot slots[SLOTS], back_slots[SLOTS];
+    Store mine;
+    mine.reset();
+    mine.v[0][X] = -40, mine.v[4][ALPHA] = 30, mine.v[1][VISIBLE] = 0;
+    slots[1].s = mine, slots[1].scale = 80, slots[1].fade = 60, slots[1].used = true;
+    FILE* sf = tmpfile();
+    CHECK(sf);
+    write_slot_lines(slots, sf);
+    rewind(sf);
+    int slot_lines = 0;
+    while (fgets(line, sizeof line, sf)) {
+        char* eq = strchr(line, '=');
+        CHECK(eq);
+        *eq = 0;
+        CHECK(strncmp(line, "enh_hud_slot2_", 14) == 0);   /* (slots 1 and 3 unused: no line) */
+        CHECK(read_slot_key(back_slots, line, eq + 1));
+        slot_lines++;
+    }
+    fclose(sf);
+    CHECK(slot_lines == 2 + HOS_ENH_HUD_ELEMENTS * FIELDS);
+    CHECK(back_slots[1].used && !back_slots[0].used && !back_slots[2].used);
+    CHECK(same(back_slots[1].s, mine) && back_slots[1].scale == 80 && back_slots[1].fade == 60);
+    CHECK(!read_slot_key(back_slots, "enh_hud_slot", "1") && !read_slot_key(back_slots, "enh_hud_slot4_scale", "1") &&
+          !read_slot_key(back_slots, "enh_hud_slot1_hearts_bogus", "1") && !read_slot_key(back_slots, "enh_hud_hearts_x", "1"));
+    CHECK(read_slot_key(back_slots, "enh_hud_slot3_scale", "999") && back_slots[2].scale == 150 && back_slots[2].used);
+    Store r2;
+    r2.reset();
+    CHECK(!read_key(r2, "enh_hud_slot1_hearts_x", "5"));   /* (a slot's line is not the HUD's own) */
+    puts("ok: HUD slots");
     return 0;
 }
 '''
@@ -131,9 +168,55 @@ int main(void) {
     hud_anchor(A_TOP, 0.0f, 0.0f, 0.0f, 0.0f, 0, 0, 0.0f, &ax, &ay);
     CHECK(ax == 0.0f && ay == 1080.0f);
     puts("ok: anchors");
+
+    /* the screen in canvas units, which the offsets are percent of */
+    float w, h;
+    hud_screen(0.0f, 0.0f, &w, &h);
+    CHECK(w == 3840.0f && h == 2160.0f);                      /* 16:9: the canvas itself */
+    hud_screen(0.5f, 1.0f, &w, &h);
+    CHECK(w == 7680.0f && h == 2160.0f);                      /* 32:9: twice as wide */
+    hud_screen(1.0f, 0.75f, &w, &h);
+    CHECK(w == 3840.0f && h == 2880.0f);                      /* 4:3: taller */
+    puts("ok: the screen's size for the offsets");
+
+    /* an element moved across the screen stays on it: a box from -2400 to -1600 on a screen 5160 wide (half 2580) */
+    CHECK(hud_keep(-2400.0f, -1600.0f, 1000.0f, 2580.0f) == 1000.0f);   /* within: as wanted */
+    CHECK(hud_keep(-2400.0f, -1600.0f, 5000.0f, 2580.0f) == 4180.0f);   /* its right side at the right edge */
+    CHECK(hud_keep(-2400.0f, -1600.0f, -900.0f, 2580.0f) == -180.0f);   /* its left side at the left edge */
+    CHECK(hud_keep(2580.0f, 2580.0f, -5160.0f, 2580.0f) == -5160.0f);   /* an anchor in the right corner: to the left one */
+    CHECK(hud_keep(2580.0f, 2580.0f, 300.0f, 2580.0f) == 0.0f);         /* and no further out */
+    CHECK(hud_keep(-3000.0f, 3000.0f, 500.0f, 2580.0f) == -(2580.0f - 3000.0f));   /* wider than the screen: its low side on */
+    puts("ok: kept on the screen");
     return 0;
 }
 '''
+
+
+KEYS_FIXTURE = r'''#include <stdio.h>
+#include <string.h>
+struct Row { const char* name; };
+static const char* hud_key(const Row& r) {
+/* LINES */
+    return nullptr;
+}
+int main() {
+    const char* names[] = {/* NAMES */};
+    const char* keys[sizeof names / sizeof names[0]];
+    int n = (int)(sizeof names / sizeof names[0]);
+    for (int i = 0; i < n; i++) {
+        keys[i] = hud_key(Row{names[i]});
+        if (!keys[i]) { fprintf(stderr, "FAIL: %s has no key\n", names[i]); return 1; }
+        printf("%s=%s\n", names[i], keys[i]);
+        for (int j = 0; j < i; j++)
+            if (!strcmp(keys[i], keys[j])) { fprintf(stderr, "FAIL: %s and %s share %s\n", names[j], names[i], keys[i]); return 1; }
+    }
+    return 0;
+}
+'''
+EXPECTED_KEYS = {"HUD preset": "enh_hud_preset", "Whole HUD size": "enh_hud_scale", "Whole HUD opacity": "enh_hud_fade",
+                 "HUD element": "enh_hud_element", "HUD visible": "enh_hud_visible", "HUD size": "enh_hud_size",
+                 "HUD position X": "enh_hud_x", "HUD position Y": "enh_hud_y", "HUD opacity": "enh_hud_opacity",
+                 "HUD slot": "enh_hud_slot"}
 
 
 def cut(source, start, end="\n}\n"):
@@ -157,12 +240,28 @@ def main():
     effective += cut(host, "static inline HudSet hud_effective(")
     anchors = "enum { A_BOX_TL, A_BOX_TR, A_ORIGIN, A_TL, A_TR, A_BL, A_BR, A_TOP, A_BOTTOM };\n"
     assert anchors in host, "host/enh_hud.c's anchors changed: update this test's cut"
-    effective += anchors + cut(host, "static inline void hud_anchor(")
+    effective += anchors + cut(host, "static inline void hud_anchor(") + cut(host, "static inline void hud_screen(") + \
+        cut(host, "static inline float hud_keep(")
+    assert "*dx = hud_keep(lo, hi, shift.want_x, shift.half_w);" in host and "hud_measure(c, pane, el - 1, x, y);" in host and \
+        "hud_screen(hos_ui_qx, hos_ui_qy, &sw, &sh);" in host, \
+        "the offsets are no longer percent of the screen kept on it: an element cannot reach every part of it"
+    wide = (ROOT / "host" / "hos_wide_ui.c").read_text(encoding="utf-8")
+    placed = cut(wide, "void hos_wide_ui_placed(Ctx *c, uint64_t pane) {")
+    assert placed.index("\n    placed(c, pane, parent);") < placed.index("hos_enh_hud_shift(c, pane, x, y, &dx, &dy)") < \
+        placed.index("store_f(c, pane + PANE_X, x + dx)") and "n->moved += dx" in placed, \
+        "host/hos_wide_ui.c no longer makes the HUD editor's place after its own moves: a wider screen's side moves " \
+        "push an element moved across the screen off it"
     assert 'ENH_HUD_GROUPS[] = {"N_ScaleL_00"};' in host and \
         "above == IN_GROUP ? own_size[e]" in host, \
         "the Whole HUD size no longer scales the left gauges' group alone as one (N_ScaleL_01 is inside N_ScaleL_00)"
     assert '"RootPane")) continue;' in host, "a whole-layout element is resized at a pane that is not its root again"
-    assert '{"PlayerStatus_00", "Pa_MpGauge_00", A_ORIGIN, 230}' in host, \
+    own = cut(host, "static int own_element(Ctx *c, uint64_t pane, uint64_t parent) {")
+    assert '"N_LocalMap_00")' in own and '"N_WorldMap_00")' in own and '"N_MiniMap_00")' in own and \
+        '"MapMenu_00") && map_page_shown()) return 0;' in own and "hos_wide_ui_force = 3;" in own and \
+        '"N_MapIcon_00")' not in host, \
+        "MapMenu_00's map page is told apart by its icons' group again: the dungeon minimap and its keys count are never " \
+        "moved, and the pause menu's map page, caught opening, is moved with the minimap"
+    assert '{"PlayerStatus_00", "Pa_MpGauge_00", A_ORIGIN, 230,' in host, \
         "the magic gauge is resized about its box again: its box is far wider than its bar, it goes off the screen"
     tick = cut(host, "void hos_enh_hud_tick(void) {")
     assert "rx_option(HOS_OPT_ENH_HUD_GEN, 0)" in tick and "if (now_gen != gen)" in tick, \
@@ -181,6 +280,18 @@ def main():
     assert "if (changed && drag_row < 0) save();" in cut(inc, "void enh_hud_sync() {"), \
         "the HUD editor no longer saves an element's change"
     assert "save();" in cut(inc, "void enh_hud_reset_press() {"), "Reset HUD is no longer saved"
+    slot = cut(inc, "void enh_hud_slot_press(const Row& r) {")
+    assert "enh_hud_slot_save(slot, opts.enh_hud_scale, opts.enh_hud_fade)" in slot and \
+        "enh_hud_slot_load(slot, &opts.enh_hud_scale, &opts.enh_hud_fade)" in slot and "save();" in slot, \
+        "Save HUD to slot / Load HUD from slot no longer keep or put back the HUD, or no longer save it"
+    assert "enh_hud_store::write_slot_lines(slots, f);" in (ROOT / "gpu" / "vk" / "enh_hud.cpp").read_text(encoding="utf-8"), \
+        "the HUD slots are no longer written to the options file"
+    for name in ("HUD position X", "HUD position Y"):
+        assert '"%s", &opts.enh_hud_%s, -100, 100, 1,' % (name, name[-1].lower()) in menu, \
+            "the %s row's range is not the store's (enh_hud_store.h LO and HI)" % name
+    bridge = cut(menu, "int menu_setting_set(")
+    assert bridge.count("enh_hud_sync();") == 2, \
+        "the control bridge's option_set changes a HUD editor row the elements never get while the menu is closed"
 
     with tempfile.TemporaryDirectory(prefix="enh-hud-") as tmp:
         t = Path(tmp)
@@ -191,6 +302,23 @@ def main():
         (t / "effective.c").write_text(EFFECTIVE_FIXTURE.replace("/* ACTUAL */", effective), encoding="utf-8")
         run([args.cc, "-std=c11", "-Wall", "-Wextra", "-Werror", str(t / "effective.c"), "-o", str(t / "effective.exe")])
         run([str(t / "effective.exe")])
+        # (each HUD row's options-file key, from ini_key's own lines: "HUD position" once matched "HUD preset"'s 'p',
+        # so both positions were saved as enh_hud_preset and the control bridge's option_set reached the preset row)
+        ini = cut(menu, "const char* ini_key(const Row& r) {")
+        lines = [l for l in ini.splitlines() if 'strncmp(r.name, "HUD ", 4)' in l or 'strncmp(r.name, "Whole HUD", 9)' in l]
+        assert len(lines) == 2, "ini_key's HUD editor lines changed: update this test's cut"
+        names = re.findall(r'\{TAB_GAMEPLAY, "((?:HUD|Whole HUD) [^"]+)", &', menu)
+        assert set(names) == set(EXPECTED_KEYS), "the HUD editor's rows changed: %s" % names
+        fixture = KEYS_FIXTURE.replace("/* LINES */", "\n".join(lines)).replace(
+            "/* NAMES */", ", ".join('"%s"' % n for n in names))
+        (t / "keys.cpp").write_text(fixture, encoding="utf-8")
+        run([args.cxx, "-std=c++17", "-Wall", "-Wextra", "-Werror", str(t / "keys.cpp"), "-o", str(t / "keys.exe")])
+        got = dict(l.split("=", 1) for l in subprocess.run([str(t / "keys.exe")], check=True, stdout=subprocess.PIPE,
+                                                            text=True).stdout.splitlines())
+        assert got == EXPECTED_KEYS, "the HUD rows' keys: %s" % got
+        slider = cut(menu, "bool is_slider(const Row& r) {") if "bool is_slider(const Row& r) {" in menu else ""
+        assert 'strncmp(r.name + 4, "pr", 2) && strncmp(r.name + 4, "sl", 2))' in menu, \
+            "HUD position X and Y are no longer sliders (dragged with the mouse)"
     print("PASS: HUD editor settings, presets, Whole HUD rows and wiring")
 
 

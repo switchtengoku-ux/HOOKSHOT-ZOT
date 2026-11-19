@@ -9,13 +9,14 @@
    - hidden: its 3x3 part set to 0, the whole element drawn from a point (as the photo mode's hidden HUD);
    - size: its 3x3 part times the size, about its own origin (an element named by its pane: its corner), or for a whole
      layout (origin at the canvas's middle) about the 16:9 canvas's corner or edge it sits on (ENH_HUD_ELEMENTS' anchor);
-   - place: its translation moved by the offsets, in the HUD canvas's units (3840 x 2160, y up).
+   - place: its translation moved by the offsets, percent of the screen's width and height (hud_screen; y up), kept on the
+     screen (hud_keep), and moved by host/hos_wide_ui.c after its own moves (hos_enh_hud_shift).
    On every pane of the element that draws (a picture, a text box, a window: not a group, whose alpha the game multiplies
    into its children, so an element nested three deep came out at an eighth): the opacity, as min(the pane's own, the
    setting) in its alpha (+0x74), so the game's fades still run. While an element is not opaque every pane remakes its
    transform each present (hos_wide_ui_force), since a pane's alpha can change with no new transform.
-   The pause menu's map page is MapMenu_00 as the minimap is: it is told apart as host/hos_wide_ui.c does (its icons'
-   group N_MapIcon_00 at the canvas's origin) and never edited.
+   The pause menu's map page is MapMenu_00 as the minimap (and the dungeon minimap with its keys count) is: it is told
+   apart by its own groups being drawn (map_page_shown) and never edited.
    The settings come from the renderer (rx_option HOS_OPT_ENH_HUD + element * 5 + field), read again only when
    HOS_OPT_ENH_HUD_GEN has changed; the Whole HUD rows (HOS_OPT_ENH_HUD_SCALE, _FADE) multiply each element's size and
    opacity (hud_effective). */
@@ -34,17 +35,24 @@ enum { A_BOX_TL, A_BOX_TR, A_ORIGIN, A_TL, A_TR, A_BL, A_BR, A_TOP, A_BOTTOM };
           gauge, whose box is far wider than the bar drawn from its origin: kept to the box, it went off the screen's left
           edge at 50%) */
 
-typedef struct { const char *layout, *pane; int anchor; float lead; } HudElement;   /* (lead: A_ORIGIN's point that far left of the origin) */
+/* (lead: A_ORIGIN's point that far left of the origin. left, right, down, up: what the element draws about its anchor at
+   100%, in canvas units, kept on the screen when it is moved (hud_keep); measured on 3440x1440 and 1920x1080 shots, with a margin, 2026-11-19. The
+   game's boxes are no use there: the item buttons' is far wider than what they draw, a whole layout's is the canvas) */
+typedef struct { const char *layout, *pane; int anchor; float lead, left, right, down, up; } HudElement;
 /* (the order is the menu's and the option ids': gpu/vk/enh_menu_hud.inc ENH_HUD_NAMES) */
 static const HudElement ENH_HUD_ELEMENTS[HOS_ENH_HUD_ELEMENTS] = {
-    {"PlayerStatus_00", "Pa_HeartGauge_00", A_BOX_TL},   /* hearts */
-    {"PlayerStatus_00", "Pa_MpGauge_00", A_ORIGIN, 230},   /* magic: its bar's left end, 230 units left of its origin (its box
-                                                               is 1256 wide about the origin; HOS_ENH_HUD_DIAG=1 logs and the
-                                                               bar lined up with the hearts, 2026-11-19) */
-    {"PlayerStatus_00", "Pa_GuideCross_00", A_BOX_TL},   /* the item buttons under them */
-    {"PlayerStatus_00", "N_ScaleR_00", A_ORIGIN},        /* the item and action buttons at the top right (origin: the corner) */
-    {"MapMenu_00", NULL, A_BR},                      /* the minimap */
-    {"Location_00", NULL, A_TOP},                    /* the place's name */
+    {"PlayerStatus_00", "Pa_HeartGauge_00", A_BOX_TL, 0, 0, 800, 220, 0},   /* hearts (two rows of ten) */
+    {"PlayerStatus_00", "Pa_MpGauge_00", A_ORIGIN, 230, 0, 450, 30, 30},    /* magic: its bar's left end, 230 units left of its
+                                                                               origin (its box is 1256 wide about the origin;
+                                                                               HOS_ENH_HUD_DIAG=1 logs and the bar lined up with
+                                                                               the hearts, 2026-11-19) */
+    {"PlayerStatus_00", "Pa_GuideCross_00", A_BOX_TL, 0, -780, 500, 600, 0},   /* the item buttons under them (their box's
+                                                                                left is 780 left of what they draw) */
+    {"PlayerStatus_00", "N_ScaleR_00", A_ORIGIN, 0, 450, 0, 500, 0},        /* the item and action buttons at the top right
+                                                                               (origin: the corner) */
+    {"MapMenu_00", NULL, A_BR, 0, 820, 0, 0, 900},                          /* the minimap (in a dungeon, its keys
+                                                                               count above it) */
+    {"Location_00", NULL, A_TOP, 0, 800, 800, 300, 0},                      /* the place's name */
 };
 enum { F_VISIBLE, F_SIZE, F_X, F_Y, F_ALPHA };
 /* (the game's own scaling group of the left gauges, hos_wide_ui.c's RULES: N_ScaleL_00, its origin at the 16:9 canvas's
@@ -59,10 +67,12 @@ typedef struct { int visible, size, x, y, alpha; } HudSet;
 static HudSet set[HOS_ENH_HUD_ELEMENTS];   /* (what is applied: the element's own times the Whole HUD rows) */
 static int own_size[HOS_ENH_HUD_ELEMENTS];   /* (its own size alone: an element in a scaled group, which has the Whole HUD's) */
 static int whole_size = 100;                 /* (the Whole HUD size, percent) */
+static volatile int page_on;   /* (MapMenu_00 shows the pause menu's map page: map_page_shown) */
 static int diag_left;   /* (lines left to log after a change: HOS_ENH_HUD_DIAG=1, the left gauges' panes as placed) */
 static int any_alpha, any_edit, restoring;   /* (restoring: presents left to put back the panes an opacity lowered) */
 int rx_option(int id, int otherwise);   /* host/rx_backend.c */
 extern volatile uint32_t hos_wide_ui_force;
+extern volatile float hos_ui_qx, hos_ui_qy;   /* host/hos_wide_ui.c */
 
 /* An element's settings as applied: its own size and opacity times the whole HUD's (percent, rounded to the nearest) */
 static inline HudSet hud_effective(HudSet own, int scale, int fade) {
@@ -71,6 +81,23 @@ static inline HudSet hud_effective(HudSet own, int scale, int fade) {
     out.alpha = (own.alpha * fade + 50) / 100;
     if (out.alpha < 1) out.alpha = 1;
     return out;
+}
+
+/* The screen's width and height in the HUD canvas's units, for the offsets (percent of them, so an element can go anywhere
+   on any screen shape): host/hos_wide_ui.c's hos_ui_qx and _qy are the share of the screen the 16:9 canvas takes across
+   and up (0: all of it, a 16:9 screen) */
+static inline void hud_screen(float qx, float qy, float *w, float *h) {
+    *w = qx > 0.0f && qx < 1.0f ? 3840.0f / qx : 3840.0f;
+    *h = qy > 0.0f && qy < 1.0f ? 2160.0f / qy : 2160.0f;
+}
+
+/* An element's move along one axis of the screen (half: half its size), as wanted but kept on it: lo and hi are what of
+   the element must stay on (its box's sides, or its anchor alone), where it is now; bigger than the screen, its low side
+   stays on */
+static inline float hud_keep(float lo, float hi, float want, float half) {
+    const float least = -half - lo, most = half - hi;
+    if (least > most) return least;
+    return want < least ? least : want > most ? most : want;
 }
 
 /* The point a resized element keeps (x, y up, in the HUD canvas's units about its middle): a corner or edge of the 16:9
@@ -141,37 +168,52 @@ static int name_is(Ctx *c, uint64_t g, const char *want) {
 enum { MAP = 1 << 14 };
 static uint64_t map[MAP];
 static uint32_t slot(uint64_t pane) { return (uint32_t)((pane >> 4) * 0x9E3779B1u) & (MAP - 1); }
-static uint64_t slot_get(uint64_t pane) {   /* (its low byte: element 0 to 7, bit 4 lowered; 0 when another pane is there) */
+static uint64_t slot_get(uint64_t pane) {   /* (its low byte: element 0 to 7, bit 4 lowered, bit 5 cut by a scissor pane
+                                                above it; 0 when another pane is there) */
     const uint64_t w = __atomic_load_n(&map[slot(pane)], __ATOMIC_ACQUIRE);
     return w >> 8 == pane ? w & 0xff : 0;
 }
 static int elem_get(uint64_t pane) { return (int)(slot_get(pane) & 7); }   /* (1 to 6, IN_GROUP, or 0) */
 static int lowered_get(uint64_t pane) { return (int)(slot_get(pane) >> 4 & 1); }
-static void elem_put(uint64_t pane, int elem, int lowered) {
-    __atomic_store_n(&map[slot(pane)], pane << 8 | (uint64_t)(elem & 7) | (uint64_t)(lowered != 0) << 4, __ATOMIC_RELEASE);
+static int clipped_get(uint64_t pane) { return (int)(slot_get(pane) >> 5 & 1); }
+static void elem_put(uint64_t pane, int elem, int lowered, int clipped) {
+    __atomic_store_n(&map[slot(pane)], pane << 8 | (uint64_t)(elem & 7) | (uint64_t)(lowered != 0) << 4 | (uint64_t)(clipped != 0) << 5,
+                     __ATOMIC_RELEASE);
 }
 
 static float ld(Ctx *c, uint64_t a) { const uint32_t u = (uint32_t)recomp_load32(c, a); float f; memcpy(&f, &u, 4); return f; }
 static void st(Ctx *c, uint64_t a, float f) { uint32_t u; memcpy(&u, &f, 4); recomp_store32(c, a, u); }
 
-/* Whether MapMenu_00's layout shows the pause menu's map page: its icons' group at the canvas's origin (hos_wide_ui.c) */
-static int map_page(Ctx *c, uint64_t layout, uint64_t res) {
-    const uint64_t base = recomp_load64(c, layout + L_PANES), names = recomp_load64(c, res + R_PANE_NAMES);
-    const uint32_t count = (uint32_t)recomp_load32(c, layout + L_COUNT) & 0xffff;
-    for (uint32_t k = 0; names && k < count && k < 512; k++)
-        if (name_is(c, recomp_load64(c, names + (uint64_t)k * 8), "N_MapIcon_00")) {
-            const uint64_t p = base + (uint64_t)k * P_SIZE;
-            return fabsf(ld(c, p + P_X)) < 1.0f && fabsf(ld(c, p + P_Y)) < 1.0f;
-        }
-    return 0;
-}
+/* Whether MapMenu_00's layout shows the pause menu's map page and not the minimap: the page's own groups (N_LocalMap_00,
+   the area's; N_WorldMap_00, the world's) were drawn in the last presents, which the minimap's never are (a hidden group's
+   transform is not made). Its icons' group at the canvas's origin, hos_wide_ui.c's sign, is no use here: the dungeon
+   minimap has it there too, and the page has it 20 units down while it opens, so the page was moved with the minimap and
+   then never told apart again (a diagnostic of its panes, 2026-11-19). A menu's panes are made again only when they change,
+   so it is a state: on when the page's groups are drawn, off when anything in N_MiniMap_00 is (the minimap's own: the
+   page draws none of it) */
+static int map_page_shown(void) { return page_on; }
 
 /* The element whose own pane this is (1 + its index), IN_GROUP for a scaling group's own pane, else 0 */
+static void pane_name(Ctx *c, uint64_t pane, char *out, size_t n);   /* (below: the diagnostic's) */
 static int own_element(Ctx *c, uint64_t pane, uint64_t parent) {
     const uint64_t layout = recomp_load64(c, pane + P_LAYOUT);
     const uint64_t res = layout ? recomp_load64(c, layout + L_RES) : 0;
     const uint64_t lname = res ? recomp_load64(c, res + R_NAME) : 0;
     if (!lname) return 0;
+    if (parent && name_is(c, lname, "MapMenu_00")) {   /* (the map page's groups drawn: map_page_shown) */
+        const uint64_t base = recomp_load64(c, layout + L_PANES), names = recomp_load64(c, res + R_PANE_NAMES);
+        const uint64_t name = names && pane >= base ? recomp_load64(c, names + (pane - base) / P_SIZE * 8) : 0;
+        const uint64_t playout = recomp_load64(c, parent + P_LAYOUT), pres = playout ? recomp_load64(c, playout + L_RES) : 0;
+        const uint64_t pbase = playout ? recomp_load64(c, playout + L_PANES) : 0, pnames = pres ? recomp_load64(c, pres + R_PANE_NAMES) : 0;
+        const uint64_t pname = pnames && parent >= pbase ? recomp_load64(c, pnames + (parent - pbase) / P_SIZE * 8) : 0;
+        const int page = name_is(c, name, "N_LocalMap_00") || name_is(c, name, "N_WorldMap_00") ? 1
+                       : name_is(c, pname, "N_MiniMap_00") ? 0 : -1;
+        if (page >= 0 && page != page_on) {
+            page_on = page;
+            hos_wide_ui_force = 3;   /* (the root was placed for the other this present: every pane made again) */
+        }
+        return 0;
+    }
     if (whole_size != 100 && parent && name_is(c, lname, "PlayerStatus_00")) {
         const uint64_t base = recomp_load64(c, layout + L_PANES), names = recomp_load64(c, res + R_PANE_NAMES);
         const uint64_t name = names && pane >= base ? recomp_load64(c, names + (pane - base) / P_SIZE * 8) : 0;
@@ -186,8 +228,14 @@ static int own_element(Ctx *c, uint64_t pane, uint64_t parent) {
                and were taken for the whole layout and resized a second time) */
             if (parent) continue;
             const uint64_t base = recomp_load64(c, layout + L_PANES), names = recomp_load64(c, res + R_PANE_NAMES);
+            if (diag_left > 0) {   /* (HOS_ENH_HUD_DIAG=1: a whole layout's panes made with no parent, and whether taken) */
+                char name[40];
+                pane_name(c, pane, name, sizeof name);
+                hos_log("enhanced: HUD diag: %s no-parent pane %s, map page %d", el->layout, name,
+                        !strcmp(el->layout, "MapMenu_00") ? map_page_shown() : -1);
+            }
             if (!names || pane < base || !name_is(c, recomp_load64(c, names + (pane - base) / P_SIZE * 8), "RootPane")) continue;
-            if (!strcmp(el->layout, "MapMenu_00") && map_page(c, layout, res)) return 0;
+            if (!strcmp(el->layout, "MapMenu_00") && map_page_shown()) return 0;
             return e + 1;
         }
         const uint64_t base = recomp_load64(c, layout + L_PANES), names = recomp_load64(c, res + R_PANE_NAMES);
@@ -207,7 +255,67 @@ static void pane_name(Ctx *c, uint64_t pane, char *out, size_t n) {
     out[n - 1] = 0;
 }
 
+/* The move hos_enh_hud_edit worked out for an element's own pane, handed to host/hos_wide_ui.c on the same thread, which
+   makes it after its own moves (hos_enh_hud_shift) */
+static _Thread_local struct {
+    uint64_t pane;
+    int e, move, whole;            /* (lo to top: about the pane's origin, or for a whole layout on the screen) */
+    float lo, hi, bottom, top, want_x, want_y, half_w, half_h;
+} shift;
+
+/* What each element draws, about its own pane's place: measured on the panes that draw as host/hos_wide_ui.c places them
+   (hos_enh_hud_shift), gathered while the element is made (cur) and kept from the last time it was (last). The table's
+   extents (ENH_HUD_ELEMENTS) are for the first presents only: measured, an element goes right to the screen's edge
+   whatever it holds (two rows of hearts or one, the dungeon minimap's keys count) */
+typedef struct { float lo, hi, bottom, top; int n; } HudExtent;
+static HudExtent ext_cur[HOS_ENH_HUD_ELEMENTS], ext_last[HOS_ENH_HUD_ELEMENTS];
+static float own_fx[HOS_ENH_HUD_ELEMENTS], own_fy[HOS_ENH_HUD_ELEMENTS];   /* (its own pane's place, as drawn) */
+
+/* A pane of element e drawn at x, y (its origin, as placed): its box added to what the element draws. Only the panes that
+   draw (picture, text box, window) and a scissor pane (4: what is under it is drawn cut to it, the map's icons beyond the
+   minimap's window are not seen), seen, and not as big as the screen */
+static void hud_measure(Ctx *c, uint64_t pane, int e, float x, float y) {
+    const uint32_t flags = (uint32_t)recomp_load32(c, pane + P_FLAGS), type = (flags >> 22) & 0xf;
+    if ((type < 1 || type > 4) || clipped_get(pane) || ld(c, pane + P_ALPHA) < 0.02f) return;
+    const float w = ld(c, pane + P_W) * fabsf(ld(c, pane + P_XX)), h = ld(c, pane + P_H) * fabsf(ld(c, pane + P_XX + 16));
+    if (!(w > 1.0f && h > 1.0f && w < 1500.0f && h < 1500.0f)) return;
+    const unsigned ox = ((flags >> 11) & 0x7f) % 3, oy = ((flags >> 11) & 0x7f) / 3 % 3;
+    const float left = x - (ox == 1 ? w * 0.5f : ox == 2 ? w : 0.0f) - own_fx[e];
+    const float top = y + (oy == 1 ? h * 0.5f : oy == 2 ? h : 0.0f) - own_fy[e];
+    HudExtent *m = &ext_cur[e];
+    if (!m->n) m->lo = left, m->hi = left + w, m->bottom = top - h, m->top = top;
+    else m->lo = fminf(m->lo, left), m->hi = fmaxf(m->hi, left + w), m->bottom = fminf(m->bottom, top - h), m->top = fmaxf(m->top, top);
+    m->n++;
+}
+
+/* Each pane just placed by host/hos_wide_ui.c at x, y (the screen's middle 0, in canvas units): an element's own pane gets
+   its move, kept on the screen (1 and the move; 0 for any other pane); a pane in an element is measured */
+int hos_enh_hud_shift(Ctx *c, uint64_t pane, float x, float y, float *dx, float *dy) {
+    if (!pane) return 0;
+    if (shift.pane != pane) {
+        const int el = any_edit ? elem_get(pane) : 0;
+        if (el >= 1 && el <= HOS_ENH_HUD_ELEMENTS) hud_measure(c, pane, el - 1, x, y);
+        return 0;
+    }
+    const int e = shift.e, move = shift.move;
+    shift.pane = 0;
+    if (ext_cur[e].n) ext_last[e] = ext_cur[e];
+    ext_cur[e].n = 0;
+    *dx = *dy = 0.0f;
+    if (move) {
+        const HudExtent *m = &ext_last[e];
+        const float ox = shift.whole ? 0.0f : x, oy = shift.whole ? 0.0f : y;
+        const float lo = m->n ? x + m->lo : ox + shift.lo, hi = m->n ? x + m->hi : ox + shift.hi;
+        const float bottom = m->n ? y + m->bottom : oy + shift.bottom, top = m->n ? y + m->top : oy + shift.top;
+        *dx = hud_keep(lo, hi, shift.want_x, shift.half_w);
+        *dy = hud_keep(bottom, top, shift.want_y, shift.half_h);
+    }
+    own_fx[e] = x + *dx, own_fy[e] = y + *dy;
+    return move;
+}
+
 void hos_enh_hud_edit(Ctx *c, uint64_t pane, uint64_t parent) {
+    shift.pane = 0;
     if (!pane) return;
     const int was_lowered = lowered_get(pane);
     if (!any_edit && !restoring && !was_lowered) return;
@@ -219,7 +327,9 @@ void hos_enh_hud_edit(Ctx *c, uint64_t pane, uint64_t parent) {
     const uint32_t type = ((uint32_t)recomp_load32(c, pane + P_FLAGS) >> 22) & 0xf;   /* (1 picture, 2 text box, 3 window) */
     const int lower = is_elem && set[e].visible && set[e].alpha < 100 && type >= 1 && type <= 3;
     if (was_lowered && !lower) st(c, pane + P_ALPHA, 1.0f);   /* (the opacity back to 100%: the pane as the game drew it) */
-    elem_put(pane, elem, lower);
+    /* (under a scissor pane (4): drawn cut to it, so not measured, the scissor pane is: hud_measure) */
+    const int clipped = elem && parent && (clipped_get(parent) || ((((uint32_t)recomp_load32(c, parent + P_FLAGS) >> 22) & 0xf) == 4));
+    elem_put(pane, elem, lower, clipped);
     if (!elem) return;
     const int diag = own && diag_left > 0 && __atomic_fetch_sub(&diag_left, 1, __ATOMIC_RELAXED) > 0;
     char diag_text[200] = "";
@@ -258,9 +368,35 @@ void hos_enh_hud_edit(Ctx *c, uint64_t pane, uint64_t parent) {
             x = ax + (x - ax) * s, y = ay + (y - ay) * s;
             for (int k = 0; k < 9; k++) st(c, pane + P_XX + 4 * (uint64_t)k, m[k]);
         }
-        x += (float)set[e].x, y += (float)set[e].y;
         st(c, pane + P_X, x), st(c, pane + P_Y, y);
-        if (diag) hos_log("enhanced: HUD diag: %s -> x=%.1f y=%.1f sx=%.3f", diag_text, x, y, ld(c, pane + P_XX));
+        shift.pane = pane, shift.e = e, shift.move = set[e].x || set[e].y;   /* (measured from its place: hos_enh_hud_shift) */
+        if (shift.move) {
+            /* (the place: percent of the screen, kept on it (hud_keep), moved by host/hos_wide_ui.c after its own moves
+               (hos_enh_hud_shift): moved here, a wider screen's side moves took the element for one on the other side and
+               pushed it off the screen) */
+            float sw, sh, ax, ay;
+            hud_screen(hos_ui_qx, hos_ui_qy, &sw, &sh);
+            const uint32_t flags = (uint32_t)recomp_load32(c, pane + P_FLAGS);
+            const unsigned ox = ((flags >> 11) & 0x7f) % 3, oy = ((flags >> 11) & 0x7f) / 3 % 3;
+            const float w = ld(c, pane + P_W) * fabsf(m[0]), h = ld(c, pane + P_H) * fabsf(m[4]);
+            const HudElement *el = &ENH_HUD_ELEMENTS[e];
+            hud_anchor(el->anchor, x, y, w, h, ox, oy, el->lead * fabsf(m[0]), &ax, &ay);
+            /* (the element on the screen, in the canvas's units across it: the 16:9 canvas's place times the screen's share,
+               its corners at the screen's; what it draws about its anchor at its size, the whole HUD's too in a group) */
+            const float k = s * (above == IN_GROUP ? (float)whole_size / 100.0f : 1.0f);
+            /* (an element named by its pane: about its origin, wherever host/hos_wide_ui.c then puts it (its parents' moves
+               are in its place already, its own are not yet); a whole layout's root stays at the canvas's middle while its
+               panes move out to the screen's sides: its corner is the screen's, the 16:9 canvas's times its share) */
+            const int whole = !el->pane;
+            const float bx = whole ? ax * sw / 3840.0f : ax - x, by = whole ? ay * sh / 2160.0f : ay - y;
+            shift.whole = whole;
+            shift.lo = bx - el->left * k, shift.hi = bx + el->right * k;
+            shift.bottom = by - el->down * k, shift.top = by + el->up * k;
+            shift.want_x = (float)set[e].x * sw / 100.0f, shift.want_y = (float)set[e].y * sh / 100.0f;
+            shift.half_w = sw * 0.5f, shift.half_h = sh * 0.5f;
+        }
+        if (diag) hos_log("enhanced: HUD diag: %s -> x=%.1f y=%.1f sx=%.3f move %.1f %.1f", diag_text, x, y, ld(c, pane + P_XX),
+                          shift.move ? shift.want_x : 0.0f, shift.move ? shift.want_y : 0.0f);
     }
     if (lower) {
         const float want = (float)set[e].alpha / 100.0f, a = ld(c, pane + P_ALPHA);

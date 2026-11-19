@@ -19,6 +19,7 @@ void logf(const char* fmt, ...);
 namespace {
 std::mutex mu;
 enh_hud_store::Store store;
+enh_hud_store::Slot slots[enh_hud_store::SLOTS];   // (the saved HUDs: the HUD slot rows)
 bool loaded = false;
 std::atomic<int> generation{1};
 
@@ -51,7 +52,7 @@ void load_locked() {
             char* eq = strchr(line, '=');
             if (!eq) continue;
             *eq = 0;
-            found |= enh_hud_store::read_key(store, line, eq + 1);
+            if (!enh_hud_store::read_slot_key(slots, line, eq + 1)) found |= enh_hud_store::read_key(store, line, eq + 1);
         }
         fclose(f);
     }
@@ -111,5 +112,29 @@ void enh_hud_save_lines(FILE* f) {
     std::lock_guard lk(mu);
     load_locked();
     enh_hud_store::write_lines(store, f);
+    enh_hud_store::write_slot_lines(slots, f);
+}
+
+void enh_hud_slot_save(int slot, int scale, int fade) {
+    if (slot < 0 || slot >= enh_hud_store::SLOTS) return;
+    {
+        std::lock_guard lk(mu);
+        load_locked();
+        slots[slot].s = store, slots[slot].scale = scale, slots[slot].fade = fade, slots[slot].used = true;
+    }
+    logf("enhanced: HUD editor: the HUD saved to slot %d", slot + 1);
+}
+
+bool enh_hud_slot_load(int slot, int* scale, int* fade) {
+    if (slot < 0 || slot >= enh_hud_store::SLOTS) return false;
+    {
+        std::lock_guard lk(mu);
+        load_locked();
+        if (!slots[slot].used) return false;
+        store = slots[slot].s, *scale = slots[slot].scale, *fade = slots[slot].fade;
+        generation.fetch_add(1, std::memory_order_release);
+    }
+    logf("enhanced: HUD editor: the HUD of slot %d", slot + 1);
+    return true;
 }
 }   // namespace mkwvk
