@@ -9,7 +9,7 @@ back as the game draws it. Every row is in English and French.
 | HUD preset | Full, Minimal, Hidden (Custom) | Which elements show: all, the hearts alone, or none. It leaves their size, place and opacity alone. It reads Custom when the elements were shown or hidden one by one |
 | Whole HUD size | 50% to 150%, steps of 5 | Every element's size times this |
 | Whole HUD opacity | 10% to 100%, steps of 10 | Every element's opacity times this |
-| HUD element | Hearts, Magic, Item buttons, Top-right buttons, Minimap, Place name | The element the rows below set; each element keeps its own settings |
+| HUD element | Hearts, Magic, Item buttons, Top-right buttons, Minimap, Place name, Dungeon minimap | The element the rows below set; each element keeps its own settings. Minimap is the areas' minimap, Dungeon minimap the dungeons' with its keys count |
 | HUD visible | Off, On | Shows or hides the element |
 | HUD size | 25% to 200%, steps of 5 | Its size. It keeps its own top-left corner (top-right for Top-right buttons), or for Minimap and Place name the canvas's bottom-right corner and top edge |
 | HUD position X | -100% to +100%, steps of 1 | Left (lower) or right (higher), as a share of the screen's width: anywhere on any screen shape |
@@ -68,6 +68,10 @@ Details that matter:
   `N_ScaleL_01` with magic and the item buttons) is scaled once about the canvas's top-left, so the three keep their
   places to one another; their own sizes then apply inside it.
 - A whole layout's root is a pane with no parent named `RootPane`: the place name's text panes come with no parent too.
+- The minimap and the dungeon minimap are both `MapMenu_00`'s root: which one shows is told by its group drawn under
+  `N_MiniMap_00` (`N_Field_01` an area's, `N_Dungeon_01` a dungeon's), a state like the map page's. Two elements,
+  since the area's map sits in the middle of a frame its shape leaves part empty while the dungeon's fills its square:
+  one move put them in different places. A file or slot from before takes the minimap's settings for the dungeon's.
 - HUD position X and Y are percent of the screen's width and height (`hud_screen`, from `hos_ui_qx`/`_qy`), so an
   element can go anywhere on any screen shape. The move is made by `hos_wide_ui.c` after its own moves
   (`hos_enh_hud_shift`, a small `(enhanced)` hook there): made before, a wider screen's side moves took an element moved

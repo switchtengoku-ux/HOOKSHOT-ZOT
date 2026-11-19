@@ -45,23 +45,28 @@ void load_locked() {
     }
     loaded = true;
     store.reset();
-    bool found = false;
+    bool found = false, dungeon = false;
     if (FILE* f = fopen(path.c_str(), "r")) {
         char line[256];
         while (fgets(line, sizeof line, f)) {
             char* eq = strchr(line, '=');
             if (!eq) continue;
             *eq = 0;
-            if (!enh_hud_store::read_slot_key(slots, line, eq + 1)) found |= enh_hud_store::read_key(store, line, eq + 1);
+            if (enh_hud_store::read_slot_key(slots, line, eq + 1)) continue;
+            const bool mine = enh_hud_store::read_key(store, line, eq + 1);
+            found |= mine, dungeon |= mine && !strncmp(line, "enh_hud_dungeon_map_", 20);
         }
         fclose(f);
     }
-    if (found) return;
-    if (!read_legacy(path.substr(0, path.find_last_of("\\/") + 1))) {
+    if (!found && !read_legacy(path.substr(0, path.find_last_of("\\/") + 1))) {
         char exe[MAX_PATH];
         const std::string game(exe, game_module_path(exe, MAX_PATH));
         read_legacy(game.substr(0, game.find_last_of("\\/") + 1));
     }
+    // (a file from before the dungeon minimap was an element of its own: it is where the minimap is, as it was)
+    if (!dungeon) enh_hud_store::inherit_dungeon_map(store);
+    for (auto& s : slots)
+        if (s.used && !s.dungeon_seen) enh_hud_store::inherit_dungeon_map(s.s);
 }
 }   // namespace
 

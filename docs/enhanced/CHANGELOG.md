@@ -25,6 +25,8 @@ Changes of the fork only. Upstream's are in [CHANGELOG.md](../../CHANGELOG.md).
 - HUD editor: Gameplay → HUD element and its rows show or hide, resize, move and fade hearts, magic, item buttons,
   top-right buttons, minimap and place name; Reset HUD puts them back ([HUD_EDITOR.md](HUD_EDITOR.md)). English and
   French. Branch `feature/hud-editor`.
+- HUD editor: the dungeon minimap (with its keys count) is an element of its own, Dungeon minimap, placed apart from
+  the areas' minimap; a layout from before takes the minimap's settings for it. Branch `feature/hud-dungeon-minimap`.
 - HUD editor, second pass: HUD preset (Full, Minimal, Hidden), Whole HUD size and Whole HUD opacity rows; the settings
   move from `enh_hud.ini` into `hookshot_options.ini` (`enh_hud_<element>_<field>`, saved with the rest of the file, whole;
   the old file is read once); the host reads the thirty values only when they change. HUD position X and Y are percent
