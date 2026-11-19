@@ -6359,6 +6359,9 @@ void fill_replay_table(MkwVkRenderer& t) {
         if (id == HOS_OPT_ENH_PHOTO) return enh_photo_on();   // (enhanced) host/enh_photo.c
         if (id >= HOS_OPT_ENH_HUD && id < HOS_OPT_ENH_HUD + HOS_ENH_HUD_ELEMENTS * ENH_HUD_FIELDS)   // (enhanced) host/enh_hud.c
             return enh_hud_value(id - HOS_OPT_ENH_HUD);
+        if (id == HOS_OPT_ENH_HUD_SCALE) return opts.enh_hud_scale;   // (enhanced) the Whole HUD rows, host/enh_hud.c
+        if (id == HOS_OPT_ENH_HUD_FADE) return opts.enh_hud_fade;
+        if (id == HOS_OPT_ENH_HUD_GEN) return enh_hud_generation();
         if (id == HOS_OPT_TEXT_SIZE) return opts.text_size;
         if (id == HOS_OPT_CAMERA_SPEED) return opts.camera_speed;
         if (id == HOS_OPT_PROMPTS) return opts.prompts;

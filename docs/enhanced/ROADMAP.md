@@ -15,7 +15,7 @@ implement, test against [TEST_BASELINE.md](TEST_BASELINE.md), document, commit.
 | 7 | Performance recording: from the menu or a key, P95/P99, session report | Postponed (performance is fine for now) | Ideas from XC3's `perfmon.c`; code in `gpu/vk/vk_fps.cpp` |
 | 8 | Mod manager tool over the existing loader: list, enable/disable, conflicts, profiles | Done: a tool ([MOD_MANAGER.md](MOD_MANAGER.md)); a Mods tab later | No second loader: `host/mods.c`'s rules |
 | 9 | Named graphics profiles | Done: a tool and two Graphics rows in the menu ([GRAPHICS_PROFILES.md](GRAPHICS_PROFILES.md)) | A tool over `hookshot_options.ini` first |
-| 10 | HUD editor | Done: six elements, visible, size, place, opacity, reset ([HUD_EDITOR.md](HUD_EDITOR.md)); no HUD profiles yet | Opacity found at pane `+0x74` |
+| 10 | HUD editor | Done: six elements, visible, size, place, opacity, reset, presets, whole-HUD size and opacity ([HUD_EDITOR.md](HUD_EDITOR.md)); no HUD profiles of your own yet | Opacity found at pane `+0x74` |
 | 11 | Photo mode | Done: phases 1 and 2 ([PHOTO_MODE.md](PHOTO_MODE.md)); no depth of field | Free camera exists in the debug tools; HUD hide to find |
 | 11b | Porting the layer to another fork of the same game (not in the original brief) | Done: `port_to.py` ([PORTING.md](PORTING.md)) | For a future Longshot Enhanced |
 | 12 | Stabilization and a first release | Later: no public release while the owner is the only player; built from the clone | When public: a zip on GitHub Releases with updating turned off, bug-report links pointing at the fork ([UPSTREAM_SYNC.md](UPSTREAM_SYNC.md)) |

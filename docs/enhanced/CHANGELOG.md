@@ -25,6 +25,9 @@ Changes of the fork only. Upstream's are in [CHANGELOG.md](../../CHANGELOG.md).
 - HUD editor: Gameplay → HUD element and its rows show or hide, resize, move and fade hearts, magic, item buttons,
   top-right buttons, minimap and place name; Reset HUD puts them back ([HUD_EDITOR.md](HUD_EDITOR.md)). English and
   French. Branch `feature/hud-editor`.
+- HUD editor, second pass: HUD preset (Full, Minimal, Hidden), Whole HUD size and Whole HUD opacity rows; the settings
+  move from `enh_hud.ini` into `hookshot_options.ini` (`enh_hud_<element>_<field>`, saved with the rest of the file, whole;
+  the old file is read once); the host reads the thirty values only when they change. Branch `feature/hud-polish`.
 - Product layer: the Enhanced files take the product's names from `host/enh_product.h` and
   `scripts/enhanced/enh_product.py`, so they can be carried to another fork of the game; the save manager takes
   `--game` (`--hookshot` still works) and reads other Enhanced forks' snapshots ([ARCHITECTURE.md](ARCHITECTURE.md)).

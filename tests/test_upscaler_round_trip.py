@@ -68,6 +68,7 @@ int failures = 0, checks = 0;
 // None is among this fixture's four rows: reaching the renderer hook is a failure.
 void menu_debug_rows(int, int) { CHECK(false); }
 void logf(const char*, ...) {}   // (declared ahead of the options code cut in below: else its logf is C's logf(float))
+void enh_hud_save_lines(FILE*) {}   // (enhanced) the HUD editor's lines (gpu/vk/enh_hud.cpp)
 /* OPTIONS */
 /* AUTO_PRESET */
 Options opts;

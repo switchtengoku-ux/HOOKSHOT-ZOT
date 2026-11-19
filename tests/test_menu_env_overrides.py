@@ -83,6 +83,7 @@ static int setenv(const char* name, const char* value, int) { return _putenv_s(n
 #endif
 static int logged;   // (save()'s line when the options file could not be written)
 void logf(const char*, ...) { logged++; }
+void enh_hud_save_lines(FILE*) {}   // (enhanced) the HUD editor's lines (gpu/vk/enh_hud.cpp)
 
 #define CHECK(x) do { if (!(x)) { std::fprintf(stderr, "FAIL %d: %s\n", __LINE__, #x); return 1; } } while (0)
 /* OPTIONS */

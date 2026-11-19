@@ -892,7 +892,9 @@ const char* tx_enh_profile(int v);   // (enhanced) the Graphics profile row: enh
 // (enhanced) the HUD editor's (enh_menu_hud.inc): its elements' names here, where menu_i18n.h's test finds them
 const char* const ENH_HUD_NAMES[HOS_ENH_HUD_ELEMENTS] = {"Hearts", "Magic", "Item buttons", "Top-right buttons",
                                                          "Minimap", "Place name"};
+const char* const ENH_HUD_PRESET_NAMES[ENH_HUD_PRESET_CUSTOM + 1] = {"Full", "Minimal", "Hidden", "Custom"};
 const char* tx_enh_hud_element(int v);
+const char* tx_enh_hud_preset(int v);
 const char* tx_enh_hud_offset(int v);
 // (enhanced) its texts, here so that menu_i18n.h translates them (tests/test_menu_i18n.py reads this file): ENH_PROFILE_*
 const char* const enh_profile_texts[] = {
@@ -1468,7 +1470,16 @@ Row rows[] = {
      "and Page Down, change its height. A or Enter switches it, F8 too in play."},
     {TAB_GAMEPLAY, "Take a photo", nullptr, 0, 0, 0, nullptr,
      "Saves the game's picture, without this menu, at its full size as a PNG in Pictures\\Hookshot. F9 too in play."},
-    // (enhanced) the HUD editor (enh_menu_hud.inc, gpu/vk/enh_hud.cpp, host/enh_hud.c): the rows below HUD element are its
+    // (enhanced) the HUD editor (enh_menu_hud.inc, gpu/vk/enh_hud.cpp, host/enh_hud.c): a preset, the whole HUD's size and
+    // opacity, then one element's rows
+    {TAB_GAMEPLAY, "HUD preset", &opts.enh_hud_preset, 0, ENH_HUD_PRESET_HIDDEN, 1, tx_enh_hud_preset,
+     "Which HUD elements are shown: Full, Minimal (the hearts alone) or Hidden. Custom when you chose them below.", nullptr,
+     false, true},
+    {TAB_GAMEPLAY, "Whole HUD size", &opts.enh_hud_scale, 50, 150, 5, tx_percent,
+     "The size of the whole HUD, on top of each element's own.", nullptr, false, true},
+    {TAB_GAMEPLAY, "Whole HUD opacity", &opts.enh_hud_fade, 10, 100, 10, tx_percent,
+     "How solid the whole HUD is drawn, on top of each element's own: lower lets the world show through.", nullptr, false,
+     true},
     {TAB_GAMEPLAY, "HUD element", &opts.enh_hud_sel, 0, HOS_ENH_HUD_ELEMENTS - 1, 1, tx_enh_hud_element,
      "The part of the HUD the rows below set: its own settings are kept for each.", nullptr, false, true},
     {TAB_GAMEPLAY, "HUD visible", &opts.enh_hud_visible, 0, 1, 1, tx_onoff,
@@ -1969,9 +1980,9 @@ constexpr int64_t kMarqueeStep = 150000000LL, kMarqueeRest = 1200000000LL;   // 
 int hover_tab = -1;
 int drag_row = -1;
 bool mouse_read = false;   // (the menu has read the mouse since it opened)
-bool is_slider(const Row& r) { return r.value == &opts.sharpness || r.value == &opts.mouse_sens || r.value == &opts.gyro_sens_x || r.value == &opts.gyro_sens_y || r.value == &opts.volume || r.value == &opts.camera_speed || r.value == &opts.fov || (r.name && (!strcmp(r.name, "Music volume") || !strcmp(r.name, "Effects volume") || (!strncmp(r.name, "HUD ", 4) && r.name[4] != 'e' && r.name[4] != 'v'))) /* (enhanced) host/enh_audio.c, host/enh_hud.c */; }
+bool is_slider(const Row& r) { return r.value == &opts.sharpness || r.value == &opts.mouse_sens || r.value == &opts.gyro_sens_x || r.value == &opts.gyro_sens_y || r.value == &opts.volume || r.value == &opts.camera_speed || r.value == &opts.fov || (r.name && (!strcmp(r.name, "Music volume") || !strcmp(r.name, "Effects volume") || (!strncmp(r.name, "HUD ", 4) && r.name[4] != 'e' && r.name[4] != 'v' && r.name[4] != 'p') || !strncmp(r.name, "Whole HUD", 9))) /* (enhanced) host/enh_audio.c, host/enh_hud.c */; }
 /// (a scale: the arrows and a click stop at its ends; Rumble strength would go from Off to its strongest)
-bool stops_at_ends(const Row& r) { return r.value == &opts.ultrawide || r.value == &opts.mouse_sens || r.value == &opts.rumble || r.value == &opts.gyro_sens_x || r.value == &opts.gyro_sens_y || r.value == &opts.volume || r.value == &opts.camera_speed || r.value == &opts.fov || (r.name && (!strcmp(r.name, "Music volume") || !strcmp(r.name, "Effects volume") || (!strncmp(r.name, "HUD ", 4) && r.name[4] != 'e' && r.name[4] != 'v'))) /* (enhanced) host/enh_audio.c, host/enh_hud.c */; }
+bool stops_at_ends(const Row& r) { return r.value == &opts.ultrawide || r.value == &opts.mouse_sens || r.value == &opts.rumble || r.value == &opts.gyro_sens_x || r.value == &opts.gyro_sens_y || r.value == &opts.volume || r.value == &opts.camera_speed || r.value == &opts.fov || (r.name && (!strcmp(r.name, "Music volume") || !strcmp(r.name, "Effects volume") || (!strncmp(r.name, "HUD ", 4) && r.name[4] != 'e' && r.name[4] != 'v' && r.name[4] != 'p') || !strncmp(r.name, "Whole HUD", 9))) /* (enhanced) host/enh_audio.c, host/enh_hud.c */; }
 /// (the ini's Rumble strength on the menu's steps: 0 to 150, the nearest 25)
 int rumble_step(int v) { return (std::min(std::max(v, 0), 150) + 12) / 25 * 25; }
 // (hookshot) A run's environment over a saved row (RX_VK_PACE=1, HOS_OUTPUT_RES=...): for that run only. save() writes the
@@ -2034,8 +2045,9 @@ const char* ini_key(const Row& r) {
     if (r.name && !strcmp(r.name, "Adaptive triggers")) return "enh_triggers";
     if (r.name && !strcmp(r.name, "Music volume")) return "enh_music_volume";
     if (r.name && !strcmp(r.name, "Graphics profile")) return "enh_graphics_profile";
-    if (r.name && !strncmp(r.name, "HUD ", 4)) return r.name[4] == 'e' ? "enh_hud_element" : r.name[4] == 'v' ? "enh_hud_visible" : r.name[4] == 's' ? "enh_hud_size" : r.name[4] == 'o' ? "enh_hud_opacity" : r.name[13] == 'X' ? "enh_hud_x" : "enh_hud_y";
+    if (r.name && !strncmp(r.name, "HUD ", 4)) return r.name[4] == 'e' ? "enh_hud_element" : r.name[4] == 'p' ? "enh_hud_preset" : r.name[4] == 'v' ? "enh_hud_visible" : r.name[4] == 's' ? "enh_hud_size" : r.name[4] == 'o' ? "enh_hud_opacity" : r.name[13] == 'X' ? "enh_hud_x" : "enh_hud_y";
     if (r.name && !strcmp(r.name, "Effects volume")) return "enh_effects_volume";
+    if (r.name && !strncmp(r.name, "Whole HUD", 9)) return r.name[10] == 's' ? "enh_hud_scale" : "enh_hud_fade";
     static char k[32];
     size_t n = 0;
     for (const char* p = r.name; *p && n + 1 < sizeof k; p++) k[n++] = *p == ' ' ? '_' : (char)tolower(*p);
@@ -2155,6 +2167,8 @@ void save() {
             mine |= key == "mesh_shaders";
             // (and the VRAM budget row's, removed: one rule by the card, texture_budget.h and mirror_budget.h)
             mine |= key == "vram_budget";
+            // (enhanced) the HUD editor's elements' lines, written below (gpu/vk/enh_hud.cpp)
+            mine |= !key.compare(0, 8, "enh_hud_");
             for (const Row& r : rows)
                 if (!mine && r.value && key == ini_key(r)) mine = true;
             if (!mine) others += line, others += others.back() == '\n' ? "" : "\n";
@@ -2193,6 +2207,7 @@ void save() {
         // Menu shortcut "Insert, F1 or Esc" by default, see menu_init; 6: the Aspect ratio's 16:9 from before moves on a
         // screen narrower than 16:9, see menu_init and host/hos_wide_size.h)
         fprintf(f, "options_version=6\n");
+        enh_hud_save_lines(f);   // (enhanced) the HUD editor's elements (gpu/vk/enh_hud.cpp)
         fputs(others.c_str(), f);
         if (!can_bind()) fputs(kept.c_str(), f);
         for (int i = 0; i < HOS_KEY_N && can_bind(); i++) {   // (the stick's and camera's rows, HOS_KEY_MOVE_*/CAM_*, have no pad_ line; the ocarina note rows do)

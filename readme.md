@@ -376,6 +376,9 @@ HDR, Detail, and GPU and memory (last: the rows to change when something is wron
 | | Field of view | 50% to 150%, in steps of 5; applies immediately during gameplay | 100% (original) |
 | | Photo mode | Off, On (Hookshot Enhanced: the HUD hidden, the world held still, the free camera; F8 in play) | Off |
 | | Take a photo | Saves a PNG of the picture at its full size in Pictures\Hookshot (Hookshot Enhanced; F9 in play) | None taken |
+| | HUD preset | Full, Minimal (the hearts alone), Hidden; Custom when the elements were chosen one by one (Hookshot Enhanced) | Full |
+| | Whole HUD size | 50% to 150%, in steps of 5 (on top of each element's own size) | 100% |
+| | Whole HUD opacity | 10% to 100%, in steps of 10 (on top of each element's own opacity) | 100% |
 | | HUD element | Hearts, Magic, Item buttons, Top-right buttons, Minimap, Place name (Hookshot Enhanced: the HUD editor's element) | Hearts |
 | | HUD visible | Off, On (the element chosen) | On |
 | | HUD size | 25% to 200%, in steps of 5 | 100% |
